@@ -1,0 +1,69 @@
+name: Release
+
+# Builds Windows + macOS installers and publishes a GitHub Release whenever the
+# version in package.json is bumped and pushed to main. Bump "version" in
+# package.json, commit, push -> a new release "v<version>" is generated.
+# Can also be run manually from the Actions tab.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'package.json'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    name: Check version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      should_release: ${{ steps.v.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release v$VERSION already exists — nothing to do."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "New version v$VERSION — will build and release."
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  release:
+    name: Build & publish (${{ matrix.os }})
+    needs: check
+    if: needs.check.outputs.should_release == 'true'
+    strategy:
+      max-parallel: 1        # publish sequentially to avoid release races
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Build renderer
+        run: npm run build:renderer
+
+      - name: Build & publish installer
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Skip macOS code signing (no certificate configured) so the build succeeds.
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+        run: npx --no-install electron-builder --publish always

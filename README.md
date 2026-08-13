@@ -90,6 +90,20 @@ npm run package:mac    # macOS .dmg
 
 Output goes to `release/`.
 
+## Automated releases (GitHub Actions)
+
+`.github/workflows/release.yml` builds Windows + macOS installers and publishes a
+GitHub Release automatically. To cut a release:
+
+1. Bump `"version"` in `package.json` (e.g. `0.1.0` → `0.1.1`).
+2. Commit and push to `main`.
+
+The workflow detects the new version, builds on Windows and macOS runners, and
+publishes a release **`v<version>`** with the installers attached. If a release
+for that version already exists, it does nothing. You can also trigger it
+manually from the repo's **Actions** tab. No secrets to configure — it uses the
+built-in `GITHUB_TOKEN`. macOS builds are unsigned (no certificate required).
+
 ---
 
 ## How a deployment works (behind the scenes)

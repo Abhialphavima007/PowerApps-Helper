@@ -4,6 +4,10 @@
   "description": "Desktop app for Power Platform solution deployment, tracking, dependency review, git integration and AI-generated deployment notes.",
   "author": "Alphavima",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Abhialphavima007/PowerApps-Helper.git"
+  },
   "main": "electron/main.js",
   "type": "commonjs",
   "scripts": {
@@ -43,6 +47,14 @@
     "directories": {
       "output": "release"
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Abhialphavima007",
+        "repo": "PowerApps-Helper",
+        "releaseType": "release"
+      }
+    ],
     "mac": {
       "target": "dmg",
       "category": "public.app-category.developer-tools"
