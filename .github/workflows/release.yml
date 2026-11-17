@@ -1,69 +1,102 @@
 name: Release
 
-# Builds Windows + macOS installers and publishes a GitHub Release whenever the
-# version in package.json is bumped and pushed to main. Bump "version" in
-# package.json, commit, push -> a new release "v<version>" is generated.
-# Can also be run manually from the Actions tab.
-
+# Every push to main produces a uniquely tagged desktop build. The release is
+# published only after all platform installers have built successfully.
 on:
   push:
     branches: [main]
-    paths:
-      - 'package.json'
   workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  check:
-    name: Check version
+  prepare:
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.v.outputs.version }}
-      should_release: ${{ steps.v.outputs.should_release }}
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-      - id: v
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - id: version
+        shell: bash
         run: |
-          VERSION=$(node -p "require('./package.json').version")
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Release v$VERSION already exists — nothing to do."
-            echo "should_release=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "New version v$VERSION — will build and release."
-            echo "should_release=true" >> "$GITHUB_OUTPUT"
-          fi
+          version=$(node -p "require('./package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v${version}+build.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
 
-  release:
-    name: Build & publish (${{ matrix.os }})
-    needs: check
-    if: needs.check.outputs.should_release == 'true'
+  build:
+    needs: prepare
     strategy:
-      max-parallel: 1        # publish sequentially to avoid release races
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        include:
+          - os: windows-latest
+            artifact: windows
+          - os: macos-latest
+            artifact: macos
+          - os: ubuntu-latest
+            artifact: linux
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-
+          cache: npm
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
-
+        run: npm ci --no-audit --no-fund
       - name: Build renderer
         run: npm run build:renderer
-
-      - name: Build & publish installer
+      - name: Package Windows x64 and ARM64
+        if: runner.os == 'Windows'
+        run: npx --no-install electron-builder --win nsis --x64 --arm64 --publish never
+      - name: Package macOS x64 and ARM64
+        if: runner.os == 'macOS'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Skip macOS code signing (no certificate configured) so the build succeeds.
           CSC_IDENTITY_AUTO_DISCOVERY: false
-        run: npx --no-install electron-builder --publish always
+        run: npx --no-install electron-builder --mac dmg --x64 --arm64 --publish never
+      - name: Package Linux x64 and ARM64
+        if: runner.os == 'Linux'
+        run: npx --no-install electron-builder --linux AppImage --x64 --arm64 --publish never
+      - name: Save installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.artifact }}
+          path: |
+            release/*.exe
+            release/*.dmg
+            release/*.AppImage
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installers-*
+          path: release-assets
+          merge-multiple: true
+      - name: Create release with all installers
+        shell: bash
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" release-assets/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" release-assets/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "PowerApps Helper $VERSION (build $GITHUB_RUN_NUMBER)" \
+              --generate-notes \
+              --latest
+          fi

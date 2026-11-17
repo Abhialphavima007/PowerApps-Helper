@@ -1,6 +1,6 @@
 # PowerApps Helper
 
-A cross-platform (Windows + macOS) desktop app for deploying Microsoft Power Platform / Dataverse **solutions** from one environment to another — with dependency review, versioning, local deployment tracking, git integration, and **AI-generated deployment notes**.
+A cross-platform (Windows, macOS, and Linux) desktop app for deploying Microsoft Power Platform / Dataverse **solutions** from one environment to another — with dependency review, versioning, local deployment tracking, git integration, and **AI-generated deployment notes**.
 
 **Sign in with your Microsoft work account — no Azure app registration required.** The app uses a Microsoft first-party **public client** (the same one Microsoft CLIs use) with an interactive loopback sign-in, then talks to the **Dataverse Web API directly** for fast, low-lag cloud calls. Access tokens are cached **locally and encrypted**, and all deployment history stays on your machine.
 
@@ -86,23 +86,21 @@ Starts Vite and launches Electron. Click **Sign in with Microsoft**, complete th
 npm run package        # current OS
 npm run package:win    # Windows installer
 npm run package:mac    # macOS .dmg
+npm run package:linux  # Linux AppImage
 ```
 
 Output goes to `release/`.
 
 ## Automated releases (GitHub Actions)
 
-`.github/workflows/release.yml` builds Windows + macOS installers and publishes a
-GitHub Release automatically. To cut a release:
-
-1. Bump `"version"` in `package.json` (e.g. `0.1.0` → `0.1.1`).
-2. Commit and push to `main`.
-
-The workflow detects the new version, builds on Windows and macOS runners, and
-publishes a release **`v<version>`** with the installers attached. If a release
-for that version already exists, it does nothing. You can also trigger it
-manually from the repo's **Actions** tab. No secrets to configure — it uses the
-built-in `GITHUB_TOKEN`. macOS builds are unsigned (no certificate required).
+Every push to `main` starts `.github/workflows/release.yml`. It builds Windows
+installers (`.exe`), macOS disk images (`.dmg`), and Linux AppImages for x64 and
+ARM64, then publishes a GitHub Release with all successful builds together.
+The release tag is `v<package version>+build.<workflow run number>`, so code-only
+pushes also get a new downloadable release. Bump the version in `package.json`
+and `package-lock.json` when the app version changes. You can also start a build
+manually from the repo's **Actions** tab. No extra secret is needed; the workflow
+uses `GITHUB_TOKEN`. macOS builds are unsigned (no certificate configured).
 
 ---
 
