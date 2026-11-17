@@ -30,6 +30,8 @@ contextBridge.exposeInMainWorld('api', {
   deploy: {
     exportSolution: (params) => ipcRenderer.invoke('deploy:export', params),
     importSolution: (params) => ipcRenderer.invoke('deploy:import', params),
+    inspectFile: (filePath) => ipcRenderer.invoke('deploy:inspectFile', { filePath }),
+    pickZip: () => ipcRenderer.invoke('dialog:pickZip'),
     record: (record) => ipcRenderer.invoke('deploy:record', record),
     onProgress: (cb) => {
       const listener = (_e, data) => cb(data);

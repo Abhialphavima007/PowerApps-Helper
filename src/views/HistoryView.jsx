@@ -27,6 +27,7 @@ export default function HistoryView() {
               <tr>
                 <th>When</th>
                 <th>Solution</th>
+                <th>Type</th>
                 <th>Version</th>
                 <th>Source → Target</th>
                 <th>Status</th>
@@ -38,6 +39,7 @@ export default function HistoryView() {
                 <tr key={d.id}>
                   <td className="muted">{new Date(d.createdAt).toLocaleString()}</td>
                   <td>{d.solution}</td>
+                  <td><span className={'pill ' + (d.exportManaged ? 'managed' : 'unmanaged')}>{d.exportManaged ? 'Managed' : 'Unmanaged'}</span></td>
                   <td className="muted">{d.version}</td>
                   <td className="muted">{d.sourceEnv} → {d.targetEnv}</td>
                   <td>

@@ -128,6 +128,24 @@ function registerIpc() {
     try { return await graph.connect(); } catch (e) { return fail(e); }
   });
 
+  // --- Pick a prebuilt solution package (.zip) and inspect it ---
+  ipcMain.handle('dialog:pickZip', async () => {
+    const r = await dialog.showOpenDialog(win, {
+      properties: ['openFile'],
+      filters: [{ name: 'Solution package', extensions: ['zip'] }]
+    });
+    if (r.canceled || !r.filePaths[0]) return { ok: false };
+    return { ok: true, path: r.filePaths[0] };
+  });
+  ipcMain.handle('deploy:inspectFile', async (_e, { filePath }) => {
+    try {
+      const inspection = zip.inspect(filePath);
+      return ok({ artifact: filePath, inspection, stored: { storage: 'local', storedPath: filePath } });
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
   // --- AI ---
   ipcMain.handle('ai:providers', () => ai.availableProviders());
   ipcMain.handle('ai:generateNotes', async (_e, payload) => {

@@ -125,6 +125,15 @@ tr:hover td { background: var(--panel-2); }
 .acct-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .acct-mail { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
+/* Segmented control */
+.seg { display: inline-flex; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 3px; gap: 3px; }
+.seg button { background: transparent; color: var(--muted); border: none; padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; }
+.seg button:hover { color: var(--text); }
+.seg button.on { background: var(--accent); color: #fff; }
+
+.pill.managed { background: rgba(79,140,255,.16); color: #a9c7ff; }
+.pill.unmanaged { background: rgba(110,231,183,.14); color: var(--accent-2); }
+
 /* Progress panel */
 .progress-panel { margin-top: 18px; display: flex; flex-direction: column; gap: 12px; }
 .pstage-head { display: flex; align-items: center; gap: 9px; margin-bottom: 6px; font-size: 13px; }
