@@ -11,10 +11,12 @@ export default function App() {
   const [accounts, setAccounts] = useState([]);
   const [authReady, setAuthReady] = useState(false);
   const [busyAuth, setBusyAuth] = useState(false);
+  const [authError, setAuthError] = useState('');
   const [envs, setEnvs] = useState([]);
   const [envLoading, setEnvLoading] = useState(false);
   const [envError, setEnvError] = useState('');
   const [providers, setProviders] = useState({ gemini: false, grok: false });
+  const refreshProviders = useCallback(() => api.ai.providers().then(setProviders), []);
 
   const refreshEnvs = useCallback(async () => {
     if (!hasApi) return;
@@ -42,27 +44,30 @@ export default function App() {
 
   useEffect(() => {
     if (!hasApi) return;
-    api.ai.providers().then(setProviders);
+    refreshProviders();
     refreshStatus().then((s) => {
       if (s.signedIn) refreshEnvs();
     });
-  }, [refreshStatus, refreshEnvs]);
+  }, [refreshStatus, refreshEnvs, refreshProviders]);
 
   const addAccount = async () => {
     setBusyAuth(true);
-    setEnvError('');
+    setAuthError('');
     try {
       const r = await api.auth.add();
       if (r.ok) {
         await refreshStatus();
         await refreshEnvs();
       } else {
-        setEnvError(r.error || 'Sign-in failed.');
+        setAuthError(/sign-in cancelled/i.test(r.error || '') ? '' : (r.error || 'Sign-in failed.'));
       }
+    } catch (e) {
+      setAuthError(String(e));
     } finally {
       setBusyAuth(false);
     }
   };
+  const cancelAccount = () => api.auth.cancel();
 
   const switchAccount = async (id) => {
     await api.auth.setActive(id);
@@ -114,13 +119,14 @@ export default function App() {
             <button className="btn small" style={{ width: '100%' }} disabled={busyAuth} onClick={addAccount}>
               {busyAuth ? <span className="spin" /> : 'Sign in'}
             </button>
+            {busyAuth && <button className="btn small secondary" style={{ width: '100%', marginTop: 6 }} onClick={cancelAccount}>Cancel sign-in</button>}
           </div>
         )}
       </aside>
 
       <main className="main">
         {!signedIn && authReady && tab !== 'account' && (
-          <SignInGate onSignIn={addAccount} signingIn={busyAuth} error={envError} />
+          <SignInGate onSignIn={addAccount} onCancel={cancelAccount} signingIn={busyAuth} error={authError} />
         )}
 
         {/* Deploy stays mounted so an in-progress export/analysis survives tab switches */}
@@ -134,17 +140,17 @@ export default function App() {
         {tab === 'account' && (
           <AccountView
             account={account} accounts={accounts} envs={envs} envLoading={envLoading} envError={envError}
-            refreshEnvs={refreshEnvs} providers={providers}
-            addAccount={addAccount} switchAccount={switchAccount} signOut={signOut} busyAuth={busyAuth}
+            refreshEnvs={refreshEnvs}
+            addAccount={addAccount} cancelAccount={cancelAccount} switchAccount={switchAccount} signOut={signOut} busyAuth={busyAuth} authError={authError}
           />
         )}
-        {signedIn && tab === 'settings' && <SettingsView />}
+        {signedIn && tab === 'settings' && <SettingsView providers={providers} onCredentialsChanged={refreshProviders} />}
       </main>
     </div>
   );
 }
 
-function SignInGate({ onSignIn, signingIn, error }) {
+function SignInGate({ onSignIn, onCancel, signingIn, error }) {
   return (
     <div className="gate">
       <div className="gate-card">
@@ -154,6 +160,7 @@ function SignInGate({ onSignIn, signingIn, error }) {
         <button className="btn" disabled={signingIn} onClick={onSignIn}>
           {signingIn ? <span className="spin" /> : '🔐 Sign in with Microsoft'}
         </button>
+        {signingIn && <button className="btn secondary" onClick={onCancel}>Cancel sign-in</button>}
       </div>
     </div>
   );

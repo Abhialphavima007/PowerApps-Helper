@@ -2,7 +2,9 @@
 
 A cross-platform (Windows, macOS, and Linux) desktop app for deploying Microsoft Power Platform / Dataverse **solutions** from one environment to another — with dependency review, versioning, local deployment tracking, git integration, and **AI-generated deployment notes**.
 
-**Sign in with your Microsoft work account — no Azure app registration required.** The app uses a Microsoft first-party **public client** (the same one Microsoft CLIs use) with an interactive loopback sign-in, then talks to the **Dataverse Web API directly** for fast, low-lag cloud calls. Access tokens are cached **locally and encrypted**, and all deployment history stays on your machine.
+[Download the latest GitHub release](https://github.com/Abhialphavima007/PowerApps-Helper/releases/latest) for Windows, macOS, or Linux.
+
+**Sign in with your Microsoft work account — no Azure app registration required for standard deployment.** The app uses a Microsoft first-party **public client** (the same one Microsoft CLIs use) with an interactive loopback sign-in, then talks to the **Dataverse Web API directly** for fast, low-lag cloud calls. Access tokens are cached **locally and encrypted**, and all deployment history stays on your machine. Agent source repair requires the MCP tenant setup described below.
 
 ---
 
@@ -11,14 +13,16 @@ A cross-platform (Windows, macOS, and Linux) desktop app for deploying Microsoft
 - **Sign in** with Microsoft credentials (MFA supported) — one click, no app registration.
 - **Multiple accounts** — connect several work accounts, switch the active one, and the environment list follows the active account.
 - **List your environments** automatically via the Global Discovery Service.
-- Pick a **source** and **target** environment and a **solution**.
+- Pick a **source** and **target** environment and an **unmanaged source solution**; export it as a managed or unmanaged package.
 - **Bump the version** before export (auto-suggested).
-- **Describe what's changing** + link **work items** — feeds the deployment notes.
-- **Export & analyze** the solution: **content summary**, **root components**, and **dependencies** (the "missing dependencies" you'd see importing through the portal). Shown *before* it moves to the next environment.
+- **Describe what's changing** + link **Azure DevOps work items** — load user stories, child tasks, descriptions, acceptance criteria, and comments; use AI to draft an editable change summary.
+- **Export & analyze** the solution: **content summary**, **root components**, and package dependency declarations. You can review these before importing.
 - **Store the exported solution** to **OneDrive** (for Business, same account) or a **local folder**, organized as `Account / Source → Target / Solution / version.zip`. Chosen in **Settings**.
-- **Deployment notes** in **Power Platform Pipelines style** — a structured template (Overview, Changes, Components, Dependencies, Work items, Steps, Verification, Rollback) that works with **no API key**, optionally polished by **Gemini** or **Grok**. Fully editable.
+- **Deployment notes** — the earlier change summary carries into the Review step as editable notes. You can optionally generate a structured Power Platform Pipelines-style version with a local template or **Azure AI Foundry, OpenAI, Claude, Grok, or Gemini**.
 - **Import to the target** with a **live progress bar** (real percentage from the import job), then publish for unmanaged solutions.
-- **Track history** — every deployment saved locally with notes, dependencies, stored-artifact link, account and status.
+- **Deploy with agent (optional)** — choose **Continue with agent** in Configure to reach deployment before exporting, or export and review first. The agent exports if needed, imports into the target, and reacts only to dependencies reported by a failed target import. It adds identifiable components to the selected unmanaged source solution, re-exports, and retries up to two repair cycles. It retains the selected environments, Azure DevOps stories, description, and notes. Each repair method and import attempt is recorded in history.
+- **Desktop notifications** — the app requests a native notification with the system sound when export or import stops, when agent deployment stops, and when deployment finishes or needs attention. The result remains visible in the app if system notifications are muted.
+- **Track history** — filter by day, week, month, route, status, or solution; export filtered records as CSV/JSON or delete history records.
 - **Git (optional)** — commit the exported `.zip` + notes to a local repo.
 
 ## Settings & storage
@@ -27,14 +31,22 @@ Open the **Settings** tab to choose where exported solutions land:
 
 - **OneDrive for Business** — uploaded via Microsoft Graph for the *same* signed-in account. Because Microsoft doesn't let the Azure CLI client call Graph, OneDrive uses a separate Graph-capable public client (the **Microsoft Graph CLI** client, `14d82eec-…`). The first **Connect OneDrive** triggers a quick sign-in/consent for that client (still no app registration). Override with `AZURE_GRAPH_CLIENT_ID` if needed.
 - **Local folder** — pick any folder; solutions are written in the same structured layout for easy tracking.
+- **AI credentials** — save API keys for OpenAI, Claude, Grok, Gemini, and Azure AI Foundry in the encrypted local credential store. Saved keys remain masked; revealing one requires Windows Hello and it hides again after 30 seconds. Azure AI Foundry also needs a model inference endpoint and model or deployment name. A Codex or ChatGPT sign-in does not supply an OpenAI API key.
+- **Azure DevOps** — enter the organization URL and a Personal Access Token with **Work Items: Read** scope. Preview one or more comma-separated stories in Settings. In a deployment, enter comma-separated IDs, `AB#` references, or work item URLs; the app fetches each item, its full child tree, related items, descriptions, acceptance criteria, status dates, and comments with progress shown for large trees. The AI summary button processes large sets in parts and writes a plain-English problem, task journey, and outcome for each story. Review it in the full-screen view or edit the change description before deployment. Work item details are sent to the chosen AI provider only when requesting AI output.
 
-> Import proceeds with the standard import behavior — it does not block on missing dependencies. Dependencies are surfaced for **review** when moving between environments, as intended.
+The manual import path remains available. Package dependency declarations are advisory and never trigger agent source repairs. The agent only makes a repair after a failed target import supplies a specific component GUID and type. It stops on missing or ambiguous diagnostics, repeated failures, inaccessible source solutions, or unsupported component types. If export itself fails, there is no package to import, so the agent stops and reports that export error.
+
+### Agent deployment and Microsoft Dataverse MCP
+
+The app connects directly to the **environment-hosted Microsoft Dataverse MCP endpoint** at https://{environment}.crm.dynamics.com/api/mcp. On first use, it may open a Microsoft sign-in for the active account using the Microsoft Dataverse MCP client. Your administrators must grant tenant consent for client ID 0c412cc3-0dd6-449b-987f-05b053db9457, enable Dataverse MCP in the source environment, and add that client to its MCP allowed list. See [Microsoft's MCP setup](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/data-platform-mcp) and [client setup](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/data-platform-mcp-other-clients).
+
+The endpoint's invoke_api tool is used for AddSolutionComponent only when its advertised schema supports the action. When the endpoint exposes no compatible tool, the agent uses the app's existing authenticated Dataverse Web API for that addition and labels it **Dataverse Web API fallback** in progress and history. It does not silently change methods after an ambiguous MCP error. Tenant policies, permissions, and live MCP tool availability vary; a local build cannot verify them.
 
 ---
 
 ## Why no app registration / low lag
 
-- **No app registration:** sign-in uses a Microsoft first-party *public* client ID (no secret, no tenant setup). Anyone with access to an environment can sign in.
+- **No app registration for standard deployment:** sign-in uses a Microsoft first-party *public* client ID with no secret. Agent source repair requires tenant consent and source environment MCP setup.
 - **Low lag:** browsing, export and import go straight to the **Dataverse Web API** over HTTPS with a cached bearer token — there is no `pac` subprocess in the hot path. After the first sign-in, tokens refresh silently.
 - **Local where it matters:** the encrypted token cache, exported solution artifacts, deployment notes and history all live in your OS app-data folder.
 
@@ -47,9 +59,9 @@ If your tenant's conditional-access policy blocks the default public client, set
 1. **Node.js 18+** (for development / building).
 2. A **Microsoft work/school account** with access to one or more Power Platform environments.
 3. **git** on your PATH (only for the optional git-commit feature).
-4. An **AI API key** (optional but recommended): Google **Gemini** and/or xAI **Grok**.
+4. An **AI API key** (optional): OpenAI, Anthropic Claude, xAI Grok, Google Gemini, or Azure AI Foundry. Configure it in Settings or `.env`.
 
-> `pac` CLI is **not required**. (A legacy `pac`-based service remains in the source but is no longer used by the app.)
+The desktop installer bundles the runtime and libraries required by the app. `pac`, the .NET SDK, and Node.js are not required on users' computers. Optional git commits require git to be installed separately.
 
 ---
 
@@ -66,11 +78,18 @@ cp .env.example .env      # add your AI key(s); Microsoft sign-in needs no confi
 |-----|---------|
 | `GEMINI_API_KEY` | Google Gemini API key |
 | `GROK_API_KEY` | xAI Grok API key |
-| `AI_PROVIDER` | Default provider: `gemini` or `grok` |
+| `OPENAI_API_KEY` | OpenAI API key |
+| `ANTHROPIC_API_KEY` | Claude API key |
+| `AZURE_FOUNDRY_API_KEY` | Azure AI Foundry model API key |
+| `AZURE_FOUNDRY_ENDPOINT` | Azure AI Foundry model inference endpoint |
+| `AZURE_FOUNDRY_MODEL` | Azure AI Foundry model or deployment name |
+| `AI_PROVIDER` | Default provider: `openai`, `claude`, `gemini`, `grok`, `foundry`, or `template` |
 | `AZURE_CLIENT_ID` | Optional public client ID override |
 | `AZURE_AUTHORITY` | Optional authority override |
 
 ---
+
+For agent deployments, DATAVERSE_MCP_CLIENT_ID optionally overrides the default Microsoft Dataverse MCP public client ID. The selected client must be approved by your tenant and allowed by the source environment.
 
 ## Run (development)
 
@@ -96,6 +115,8 @@ Output goes to `release/`.
 Every push to `main` starts `.github/workflows/release.yml`. It builds Windows
 installers (`.exe`), macOS disk images (`.dmg`), and Linux AppImages for x64 and
 ARM64, then publishes a GitHub Release with all successful builds together.
+Commit and push to the main branch to publish the next release; a local commit
+alone does not start GitHub Actions.
 The release tag is `v<package version>+build.<workflow run number>`, so code-only
 pushes also get a new downloadable release. Bump the version in `package.json`
 and `package-lock.json` when the app version changes. You can also start a build
@@ -109,9 +130,9 @@ uses `GITHUB_TOKEN`. macOS builds are unsigned (no certificate configured).
 1. `PATCH solutions(id)` — sets the new version in the source (if you changed it).
 2. `ExportSolution` action — downloads the solution as base64, written to the local artifacts folder as a `.zip`.
 3. The `.zip` is inspected locally (`solution.xml` / `customizations.xml`) to build the **dependency** and **content** views.
-4. Your description + the analysis are sent to **Gemini/Grok** to draft **deployment notes**.
+4. The change description carries into editable **deployment notes** on the Review screen, or directly onto the deployment screen when using the pre-export agent path. You can optionally generate formatted notes from the package analysis and fetched Azure DevOps details on Review; the local template needs no AI key.
 5. `ImportSolutionAsync` — imports into the **target**, polling the async operation for progress; `PublishAllXml` runs afterward for unmanaged solutions.
-6. The deployment (metadata + notes + dependencies + artifact path) is written to a local JSON store; notes are also saved as `.md`. Optionally committed to git.
+6. The deployment (metadata + notes + dependencies + work item snapshot + artifact path) is written to a local JSON store; notes are also saved as `.md`. Optionally committed to git.
 
 Artifacts, notes, history and the encrypted token cache live under your OS app-data folder in `powerapps-helper/`.
 
@@ -126,19 +147,22 @@ electron/
   services/
     auth.js            Microsoft sign-in — multi-account, cancellable loopback, token cache
     dataverse.js       Dataverse Web API: discovery, export, async import (w/ progress), publish
+    dataverseMcp.js    Direct connection to Microsoft's environment MCP endpoint
+    deploymentAgent.js Bounded import, dependency repair, re-export, and retry workflow
     graph.js           OneDrive upload via Microsoft Graph (chunked upload session)
     solutionZip.js     Parses exported .zip for deps + content summary
     store.js           Local JSON history store + settings
-    ai.js              Pipeline-style notes: deterministic template + Gemini/Grok polish
+    credentials.js     Encrypted API keys and Azure DevOps token
+    azureDevOps.js     Work item tree and comments
+    ai.js              AI summaries and pipeline-style deployment notes
     git.js             Optional local git integration
-    pac.js             (legacy, unused) Power Platform CLI wrapper
 src/
   App.jsx              Layout, multi-account state, persistent Deploy tab
   views/
-    DeployView.jsx     4-step deploy wizard with live progress bar
-    HistoryView.jsx    Deployment history + detail
+    DeployView.jsx     3-step deploy wizard with live progress bar
+    HistoryView.jsx    Filter, export, and delete deployment history
     AccountView.jsx    Connect/switch/remove accounts, environments
-    SettingsView.jsx   Storage mode (OneDrive / local folder) + Connect OneDrive
+    SettingsView.jsx   Storage, AI credentials, and Azure DevOps setup
 index.html, vite.config.js, package.json
 ```
 

@@ -19,6 +19,7 @@ const { PublicClientApplication, CryptoProvider } = require('@azure/msal-node');
 
 const DV_CLIENT_ID = process.env.AZURE_CLIENT_ID || '04b07795-8ddb-461a-bbee-02f9e1bf7b46'; // Azure CLI
 const GRAPH_CLIENT_ID = process.env.AZURE_GRAPH_CLIENT_ID || '14d82eec-204b-4c2f-b7e8-296a70dab67e'; // Graph CLI
+const MCP_CLIENT_ID = process.env.DATAVERSE_MCP_CLIENT_ID || '0c412cc3-0dd6-449b-987f-05b053db9457'; // Microsoft Dataverse MCP CLI client
 const AUTHORITY = process.env.AZURE_AUTHORITY || 'https://login.microsoftonline.com/common';
 
 const GLOBAL_DISCO = 'https://globaldisco.crm.dynamics.com';
@@ -26,9 +27,11 @@ const GRAPH = 'https://graph.microsoft.com';
 
 let dvPca; // Dataverse client
 let graphPca; // Graph client
+let mcpPca; // Environment-hosted Dataverse MCP client
 let cryptoProvider;
 let dvCacheFile;
 let graphCacheFile;
+let mcpCacheFile;
 let activeFile;
 let activeHomeAccountId = null;
 let inflight = null;
@@ -62,12 +65,14 @@ function init(userDataPath) {
   const dir = path.join(userDataPath, 'powerapps-helper');
   dvCacheFile = path.join(dir, 'msal-cache.bin');
   graphCacheFile = path.join(dir, 'graph-cache.bin');
+  mcpCacheFile = path.join(dir, 'mcp-cache.bin');
   activeFile = path.join(dir, 'active-account.json');
   try {
     if (fs.existsSync(activeFile)) activeHomeAccountId = JSON.parse(fs.readFileSync(activeFile, 'utf8')).homeAccountId || null;
   } catch {}
   dvPca = new PublicClientApplication({ auth: { clientId: DV_CLIENT_ID, authority: AUTHORITY }, cache: { cachePlugin: cachePlugin(dvCacheFile) } });
   graphPca = new PublicClientApplication({ auth: { clientId: GRAPH_CLIENT_ID, authority: AUTHORITY }, cache: { cachePlugin: cachePlugin(graphCacheFile) } });
+  mcpPca = new PublicClientApplication({ auth: { clientId: MCP_CLIENT_ID, authority: AUTHORITY }, cache: { cachePlugin: cachePlugin(mcpCacheFile) } });
   cryptoProvider = new CryptoProvider();
 }
 
@@ -81,7 +86,7 @@ function scopeFor(resourceUrl) {
 const SUCCESS_HTML =
   '<html><body style="font-family:-apple-system,Segoe UI,sans-serif;background:#0f1420;color:#e6ecf7;display:flex;height:100vh;align-items:center;justify-content:center"><div style="text-align:center"><h2>✔ Signed in</h2><p>You can close this tab and return to PowerApps Helper.</p></div></body></html>';
 const FAIL_HTML = (m) =>
-  `<html><body style="font-family:-apple-system,Segoe UI,sans-serif;background:#0f1420;color:#e6ecf7;display:flex;height:100vh;align-items:center;justify-content:center"><div style="text-align:center"><h2>Sign-in problem</h2><p>${m}</p><p>Return to PowerApps Helper and try again.</p></div></body></html>`;
+  `<html><body style="font-family:-apple-system,Segoe UI,sans-serif;background:#0f1420;color:#e6ecf7;display:flex;height:100vh;align-items:center;justify-content:center"><div style="text-align:center"><h2>Sign-in problem</h2><p>${String(m).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])}</p><p>Return to PowerApps Helper and try again.</p></div></body></html>`;
 
 function cancelSignIn() {
   if (inflight) {
@@ -89,7 +94,7 @@ function cancelSignIn() {
     inflight = null;
     try { if (c.timeout) clearTimeout(c.timeout); } catch {}
     try { if (c.server) c.server.close(); } catch {}
-    try { if (c.reject) c.reject(new Error('Sign-in cancelled.')); } catch {}
+    c.reject(new Error('Sign-in cancelled.'));
   }
   return { ok: true };
 }
@@ -97,28 +102,30 @@ function cancelSignIn() {
 // Manual, cancellable loopback interactive sign-in for a given client (pca).
 async function interactiveLogin(pca, scopes, loginHint) {
   cancelSignIn();
-  const { verifier, challenge } = await cryptoProvider.generatePkceCodes();
   const server = http.createServer();
   const controller = { server };
+  const cancelled = new Promise((_, reject) => { controller.reject = reject; });
   inflight = controller;
   try {
-    await new Promise((res, rej) => {
+    controller.timeout = setTimeout(() => controller.reject(new Error('Sign-in timed out. Please try again.')), 5 * 60 * 1000);
+    const { verifier, challenge } = await Promise.race([cryptoProvider.generatePkceCodes(), cancelled]);
+    await Promise.race([new Promise((res, rej) => {
       server.once('error', rej);
       server.listen(0, '127.0.0.1', res);
-    });
+    }), cancelled]);
+    if (inflight !== controller) throw new Error('Sign-in cancelled.');
     const port = server.address().port;
     const redirectUri = `http://localhost:${port}`;
-    const authUrl = await pca.getAuthCodeUrl({
+    const authUrl = await Promise.race([pca.getAuthCodeUrl({
       scopes,
       redirectUri,
       codeChallenge: challenge,
       codeChallengeMethod: 'S256',
       prompt: loginHint ? undefined : 'select_account',
       loginHint
-    });
-    const result = await new Promise((resolve, reject) => {
-      controller.reject = reject;
-      controller.timeout = setTimeout(() => reject(new Error('Sign-in timed out. Please try again.')), 5 * 60 * 1000);
+    }), cancelled]);
+    if (inflight !== controller) throw new Error('Sign-in cancelled.');
+    const result = await Promise.race([new Promise((resolve, reject) => {
       server.on('request', async (req, res) => {
         try {
           const u = new URL(req.url, redirectUri);
@@ -130,15 +137,16 @@ async function interactiveLogin(pca, scopes, loginHint) {
             return reject(new Error(u.searchParams.get('error_description') || err));
           }
           if (!code) { res.end('Waiting for sign-in…'); return; }
-          res.end(SUCCESS_HTML);
           const token = await pca.acquireTokenByCode({ code, scopes, redirectUri, codeVerifier: verifier });
+          res.end(SUCCESS_HTML);
           resolve(token);
         } catch (e) {
+          if (!res.writableEnded) res.end(FAIL_HTML('Authentication could not be completed.'));
           reject(e);
         }
       });
       shell.openExternal(authUrl).catch(reject);
-    });
+    }), cancelled]);
     return result;
   } finally {
     try { if (controller.timeout) clearTimeout(controller.timeout); } catch {}
@@ -177,9 +185,16 @@ async function setActive(homeAccountId) {
   return { ok: true, account: a ? mapAcct(a) : null };
 }
 async function signOut(homeAccountId) {
+  const removed = (await allAccounts()).filter((a) => !homeAccountId || a.homeAccountId === homeAccountId);
   const cache = dvPca.getTokenCache();
   const accts = await cache.getAllAccounts();
   for (const a of accts) if (!homeAccountId || a.homeAccountId === homeAccountId) await cache.removeAccount(a);
+  try {
+    const mcpCache = mcpPca.getTokenCache();
+    for (const mcpAccount of await mcpCache.getAllAccounts()) {
+      if (removed.some((a) => a.username?.toLowerCase() === mcpAccount.username?.toLowerCase())) await mcpCache.removeAccount(mcpAccount);
+    }
+  } catch {}
   if (!homeAccountId || homeAccountId === activeHomeAccountId) {
     const rest = await cache.getAllAccounts();
     activeHomeAccountId = rest[0] ? rest[0].homeAccountId : null;
@@ -193,6 +208,7 @@ async function signOut(homeAccountId) {
       for (const a of await gc.getAllAccounts()) await gc.removeAccount(a);
       if (fs.existsSync(graphCacheFile)) fs.unlinkSync(graphCacheFile);
     } catch {}
+    try { if (fs.existsSync(mcpCacheFile)) fs.unlinkSync(mcpCacheFile); } catch {}
   }
   return { ok: true };
 }
@@ -213,6 +229,23 @@ async function getToken(resourceUrl) {
   activeHomeAccountId = r.account.homeAccountId;
   persistActive();
   return r.accessToken;
+}
+
+async function getMcpToken(resourceUrl) {
+  const active = await getActiveAccount();
+  if (!active) throw new Error('Sign in to a Microsoft account before using the deployment agent.');
+  const scopes = scopeFor(resourceUrl);
+  const matches = (await mcpPca.getTokenCache().getAllAccounts()).filter(
+    (item) => item.username?.toLowerCase() === active.username?.toLowerCase()
+  );
+  for (const account of matches) {
+    try { return (await mcpPca.acquireTokenSilent({ account, scopes })).accessToken; } catch {}
+  }
+  const result = await interactiveLogin(mcpPca, scopes, active.username);
+  if (result.account?.username?.toLowerCase() !== active.username?.toLowerCase()) {
+    throw new Error('The Dataverse MCP sign-in used a different account. Retry with the active PowerApps Helper account.');
+  }
+  return result.accessToken;
 }
 
 // ---------- Graph tokens (OneDrive) ----------
@@ -245,6 +278,7 @@ module.exports = {
   signOut,
   status,
   getToken,
+  getMcpToken,
   getGraphToken,
   GLOBAL_DISCO,
   GRAPH

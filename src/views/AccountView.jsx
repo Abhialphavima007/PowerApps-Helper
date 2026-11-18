@@ -1,86 +1,60 @@
 import React from 'react';
 import { api } from '../api.js';
 
-export default function AccountView({ account, accounts, envs, envLoading, envError, refreshEnvs, providers, addAccount, switchAccount, signOut, busyAuth }) {
-  return (
-    <div>
-      <p className="h1">Accounts &amp; environments</p>
-      <p className="sub">
-        Connect one or more Microsoft work accounts — no app registration needed. Switch the active
-        account to see that account's environments. Tokens are cached locally and encrypted.
-      </p>
+function initials(name) {
+  return String(name || '?').trim().split(/\s+/).slice(0, 2).map((part) => part[0]?.toUpperCase()).join('');
+}
 
-      <div className="card">
-        <div className="toolbar">
-          <h3 style={{ margin: 0, flex: 1 }}>Connected accounts</h3>
-          <button className="btn small" disabled={busyAuth} onClick={addAccount}>
-            {busyAuth ? <span className="spin" /> : '+ Add account'}
-          </button>
-        </div>
-        {(!accounts || accounts.length === 0) ? (
-          <div className="empty">No accounts connected. Click “Add account”.</div>
-        ) : (
-          <table>
-            <thead>
-              <tr><th></th><th>Name</th><th>Account</th><th>Tenant</th><th></th></tr>
-            </thead>
-            <tbody>
-              {accounts.map((a) => (
-                <tr key={a.homeAccountId}>
-                  <td>{a.active ? <span className="pill ok">active</span> : ''}</td>
-                  <td>{a.name}</td>
-                  <td className="muted">{a.username}</td>
-                  <td className="muted" style={{ fontSize: 11 }}>{a.tenantId}</td>
-                  <td>
-                    {!a.active && <button className="btn small secondary" onClick={() => switchAccount(a.homeAccountId)}>Switch</button>}{' '}
-                    <button className="btn small danger" onClick={() => signOut(a.homeAccountId)}>Remove</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+export default function AccountView({ account, accounts, envs, envLoading, envError, refreshEnvs, addAccount, cancelAccount, switchAccount, signOut, busyAuth, authError }) {
+  const ordered = [...(accounts || [])].sort((left, right) => Number(right.active) - Number(left.active));
+  const remove = (item) => {
+    if (window.confirm(`Remove ${item.username} from this app? You can connect it again later.`)) signOut(item.homeAccountId);
+  };
 
-      <div className="card">
-        <div className="toolbar">
-          <h3 style={{ margin: 0, flex: 1 }}>
-            Environments {account ? `· ${account.name || account.username}` : ''} {envLoading && <span className="spin" />}
-          </h3>
-          <button className="btn small secondary" onClick={refreshEnvs} disabled={!account}>Refresh</button>
-        </div>
-        {envError && <div className="alert warn">{envError}</div>}
-        {!account ? (
-          <div className="empty">Add an account to load environments.</div>
-        ) : envs.length === 0 ? (
-          <div className="empty">{envLoading ? 'Loading…' : 'No environments found for this account.'}</div>
-        ) : (
-          <table>
-            <thead><tr><th>Display name</th><th>Type</th><th>URL</th><th></th></tr></thead>
-            <tbody>
-              {envs.map((e) => (
-                <tr key={e.environmentUrl}>
-                  <td>{e.displayName}</td>
-                  <td className="muted">{e.type || '—'}</td>
-                  <td className="muted">{e.environmentUrl}</td>
-                  <td><button className="btn small secondary" onClick={() => api.util.openExternal(e.environmentUrl)}>Open</button></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      <div className="card">
-        <h3>AI providers</h3>
-        <div className="badge-list">
-          <span className={'pill ' + (providers.gemini ? 'ok' : 'muted')}>Gemini {providers.gemini ? 'key set' : 'no key'}</span>
-          <span className={'pill ' + (providers.grok ? 'ok' : 'muted')}>Grok {providers.grok ? 'key set' : 'no key'}</span>
-        </div>
-        <p className="muted" style={{ marginBottom: 0 }}>
-          Notes work without a key (template). Add <code>GEMINI_API_KEY</code> and/or <code>GROK_API_KEY</code> to <code>.env</code> for AI-polished notes.
-        </p>
+  return <div>
+    <div className="account-page-head">
+      <div><p className="h1">Accounts</p><p className="sub">Manage Microsoft work accounts and the environments available to the active account.</p></div>
+      <div className="account-head-actions">
+        <button className="btn" disabled={busyAuth} onClick={addAccount}>{busyAuth ? <span className="spin" /> : '+ Add account'}</button>
+        {busyAuth && <button className="btn secondary" onClick={cancelAccount}>Cancel sign-in</button>}
       </div>
     </div>
-  );
+    {authError && <div className="alert err">{authError}</div>}
+
+    <div className="account-overview">
+      <div className="account-overview-icon">{initials(account?.name || account?.username)}</div>
+      <div className="account-overview-text">
+        <span className="eyebrow">ACTIVE ACCOUNT</span>
+        <h2>{account?.name || 'No account connected'}</h2>
+        <div className="muted">{account?.username || 'Add a Microsoft work account to get started.'}</div>
+        {account?.tenantId && <div className="account-tenant">Tenant {account.tenantId}</div>}
+      </div>
+      <div className="account-overview-stats"><div><b>{accounts?.length || 0}</b><span>Accounts</span></div><div><b>{envs.length}</b><span>Environments</span></div></div>
+    </div>
+
+    <div className="section-head"><div><h3>Connected accounts</h3><p className="muted">Select an account to browse its environments and deploy with it.</p></div></div>
+    {!ordered.length ? <div className="card empty">No accounts connected yet.</div> : <div className="account-grid">
+      {ordered.map((item) => <div className={'account-card ' + (item.active ? 'active' : '')} key={item.homeAccountId}>
+        <div className="account-card-top"><div className="account-avatar">{initials(item.name || item.username)}</div><span className={'pill ' + (item.active ? 'ok' : 'muted')}>{item.active ? 'Active' : 'Available'}</span></div>
+        <h3>{item.name || item.username}</h3>
+        <div className="muted account-mail">{item.username}</div>
+        <div className="account-tenant">Tenant {item.tenantId || '—'}</div>
+        <div className="account-card-actions">
+          {!item.active && <button className="btn small" onClick={() => switchAccount(item.homeAccountId)}>Use account</button>}
+          <button className="btn small secondary" onClick={() => remove(item)}>Remove</button>
+        </div>
+      </div>)}
+    </div>}
+
+    <div className="section-head"><div><h3>Environments {envLoading && <span className="spin" />}</h3><p className="muted">{account ? `Available to ${account.username}` : 'Connect an account to view environments.'}</p></div><button className="btn small secondary" onClick={refreshEnvs} disabled={!account || envLoading}>Refresh</button></div>
+    {envError && <div className="alert warn">{envError}</div>}
+    {!account ? <div className="card empty">Add an account to load environments.</div> : !envs.length ? <div className="card empty">{envLoading ? 'Loading environments…' : 'No environments found for this account.'}</div> : <div className="environment-grid">
+      {envs.map((environment) => <div className="environment-card" key={environment.environmentUrl || environment.environmentId}>
+        <div className="environment-card-top"><span className="environment-mark">◈</span><span className="pill muted">{environment.type || 'Environment'}</span></div>
+        <h3>{environment.displayName}</h3>
+        <div className="muted environment-url" title={environment.environmentUrl}>{environment.environmentUrl}</div>
+        <button className="btn small secondary" onClick={() => api.util.openExternal(environment.environmentUrl)}>Open environment ↗</button>
+      </div>)}
+    </div>}
+  </div>;
 }

@@ -1,20 +1,116 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
+import WorkItemDetails from '../components/WorkItemDetails.jsx';
 
-export default function SettingsView() {
+const AI_PROVIDERS = [
+  { id: 'foundry', label: 'Azure AI Foundry', hint: 'Azure AI Foundry model API key' },
+  { id: 'openai', label: 'OpenAI / Codex', hint: 'OpenAI API key' },
+  { id: 'claude', label: 'Claude', hint: 'Anthropic API key' },
+  { id: 'grok', label: 'Grok', hint: 'xAI API key' },
+  { id: 'gemini', label: 'Gemini', hint: 'Google API key' }
+];
+
+function CredentialControl({ name, label, hint, saved, draft, editing, revealed, busy, revealBusy, onChange, onSave, onRemove, onReveal, onHide, onReplace, onCancel }) {
+  const locked = saved && !editing;
+  return <div className="credential-controls">
+    <input
+      type={locked && revealed ? 'text' : 'password'}
+      aria-label={`${label} credential`}
+      autoComplete="off"
+      readOnly={locked}
+      value={locked ? (revealed || 'saved-credential') : draft}
+      onChange={(event) => { if (!locked) onChange(event.target.value); }}
+      placeholder={hint}
+    />
+    {locked ? <>
+      <button className="btn small secondary" disabled={!!busy || !!revealBusy} onClick={revealed ? onHide : onReveal}>{revealBusy ? <span className="spin" /> : revealed ? 'Hide' : 'Show'}</button>
+      <button className="btn small secondary" disabled={!!busy} onClick={onReplace}>Replace</button>
+      <button className="btn small secondary" disabled={!!busy} onClick={onRemove}>Remove</button>
+    </> : <>
+      <button className="btn small" disabled={!draft || !!busy} onClick={onSave}>Save</button>
+      {saved && <button className="btn small secondary" disabled={!!busy} onClick={onCancel}>Cancel</button>}
+    </>}
+  </div>;
+}
+
+export default function SettingsView({ providers, onCredentialsChanged }) {
   const [settings, setSettings] = useState(null);
   const [saving, setSaving] = useState(false);
   const [odBusy, setOdBusy] = useState(false);
   const [od, setOd] = useState(null);
   const [odError, setOdError] = useState('');
+  const [credentialStatus, setCredentialStatus] = useState({});
+  const [draftKeys, setDraftKeys] = useState({});
+  const [credentialBusy, setCredentialBusy] = useState('');
+  const [credentialMessage, setCredentialMessage] = useState('');
+  const [credentialError, setCredentialError] = useState('');
+  const [editingKeys, setEditingKeys] = useState({});
+  const [revealedKeys, setRevealedKeys] = useState({});
+  const [revealBusy, setRevealBusy] = useState('');
+  const revealTimers = useRef({});
+  const [previewReference, setPreviewReference] = useState('');
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [previewProgress, setPreviewProgress] = useState(null);
+  const [previewDetails, setPreviewDetails] = useState(null);
+  const [previewError, setPreviewError] = useState('');
 
-  useEffect(() => { api.settings.get().then(setSettings); }, []);
+  useEffect(() => {
+    api.settings.get().then(setSettings);
+    api.credentials.status().then(setCredentialStatus).catch((e) => setCredentialError(String(e)));
+    return () => Object.values(revealTimers.current).forEach(clearTimeout);
+  }, []);
+
+  const hideCredential = (name) => {
+    clearTimeout(revealTimers.current[name]);
+    setRevealedKeys((current) => { const next = { ...current }; delete next[name]; return next; });
+  };
+  const revealCredential = async (name) => {
+    setRevealBusy(name); setCredentialError('');
+    try {
+      const result = await api.credentials.reveal(name);
+      if (!result.ok) throw new Error(result.error);
+      setRevealedKeys((current) => ({ ...current, [name]: result.value }));
+      clearTimeout(revealTimers.current[name]);
+      revealTimers.current[name] = setTimeout(() => hideCredential(name), 30000);
+    } catch (error) { setCredentialError(String(error.message || error)); }
+    finally { setRevealBusy(''); }
+  };
+
+  const saveCredential = async (name) => {
+    setCredentialBusy(name); setCredentialError(''); setCredentialMessage('');
+    try {
+      const result = await api.credentials.save(name, draftKeys[name] || '');
+      if (!result.ok) throw new Error(result.error);
+      setCredentialStatus(result.status);
+      setDraftKeys((current) => ({ ...current, [name]: '' }));
+      setEditingKeys((current) => ({ ...current, [name]: false }));
+      hideCredential(name);
+      setCredentialMessage(`${name === 'azureDevOps' ? 'Azure DevOps' : name} credential saved.`);
+      await onCredentialsChanged();
+    } catch (e) { setCredentialError(String(e.message || e)); }
+    finally { setCredentialBusy(''); }
+  };
+
+  const removeCredential = async (name) => {
+    setCredentialBusy(name); setCredentialError(''); setCredentialMessage('');
+    try {
+      const result = await api.credentials.remove(name);
+      if (!result.ok) throw new Error(result.error);
+      setCredentialStatus(result.status);
+      setEditingKeys((current) => ({ ...current, [name]: false }));
+      hideCredential(name);
+      setCredentialMessage(`${name === 'azureDevOps' ? 'Azure DevOps' : name} credential removed.`);
+      await onCredentialsChanged();
+    } catch (e) { setCredentialError(String(e.message || e)); }
+    finally { setCredentialBusy(''); }
+  };
 
   const update = async (patch) => {
     setSaving(true);
     try {
       const next = await api.settings.save(patch);
-      setSettings(next);
+      setSettings((current) => ({ ...current, ...next, aiModels: { ...next.aiModels, ...current.aiModels, ...patch.aiModels } }));
+      if ('azureFoundryEndpoint' in patch || 'foundry' in (patch.aiModels || {})) await onCredentialsChanged();
     } finally {
       setSaving(false);
     }
@@ -35,6 +131,17 @@ export default function SettingsView() {
     } finally {
       setOdBusy(false);
     }
+  };
+
+  const previewWorkItem = async () => {
+    setPreviewBusy(true); setPreviewError(''); setPreviewDetails(null); setPreviewProgress(null);
+    try {
+      await api.settings.save({ azureDevOpsOrgUrl: settings.azureDevOpsOrgUrl });
+      const result = await api.devops.fetch(previewReference, setPreviewProgress);
+      if (!result.ok) throw new Error(result.error);
+      setPreviewDetails(result);
+    } catch (error) { setPreviewError(String(error.message || error)); }
+    finally { setPreviewBusy(false); }
   };
 
   if (!settings) return <div className="empty">Loading…</div>;
@@ -97,6 +204,40 @@ export default function SettingsView() {
         )}
         {saving && <div className="muted" style={{ marginTop: 10 }}><span className="spin" /> Saving…</div>}
       </div>
+
+      <div className="card">
+        <h3>AI providers</h3>
+        <p className="muted">Saved keys remain visible as masked fields. Showing a saved key requires Windows Hello and automatically hides it after 30 seconds. Work item details are sent to the chosen provider only when you request AI output. OpenAI requires an API key; a ChatGPT or Codex sign-in alone is not an API key.</p>
+        {AI_PROVIDERS.map((item) => <div className="credential-row" key={item.id}>
+          <div className="credential-heading"><b>{item.label}</b><span className={'pill ' + (providers[item.id] ? 'ok' : 'muted')}>{credentialStatus[item.id] && item.id === 'foundry' && !providers.foundry ? 'Key saved · complete setup' : credentialStatus[item.id] ? 'Saved' : providers[item.id] ? 'From .env' : 'Not configured'}</span></div>
+          <CredentialControl name={item.id} label={item.label} hint={item.hint} saved={!!credentialStatus[item.id]} draft={draftKeys[item.id] || ''} editing={!!editingKeys[item.id]} revealed={revealedKeys[item.id]} busy={credentialBusy} revealBusy={revealBusy === item.id} onChange={(value) => setDraftKeys((current) => ({ ...current, [item.id]: value }))} onSave={() => saveCredential(item.id)} onRemove={() => removeCredential(item.id)} onReveal={() => revealCredential(item.id)} onHide={() => hideCredential(item.id)} onReplace={() => { hideCredential(item.id); setEditingKeys((current) => ({ ...current, [item.id]: true })); }} onCancel={() => { setDraftKeys((current) => ({ ...current, [item.id]: '' })); setEditingKeys((current) => ({ ...current, [item.id]: false })); }} />
+          {item.id === 'foundry' && <><label style={{ marginTop: 8 }}>Model inference endpoint</label><input value={settings.azureFoundryEndpoint || ''} onChange={(event) => setSettings((current) => ({ ...current, azureFoundryEndpoint: event.target.value }))} onBlur={(event) => update({ azureFoundryEndpoint: event.target.value })} placeholder="https://your-resource.services.ai.azure.com/models" /><p className="muted">Use an Azure AI Foundry model endpoint or Azure OpenAI resource URL.</p></>}
+          <label style={{ marginTop: 8 }}>{item.id === 'foundry' ? 'Model or deployment name' : 'Model'}</label>
+          <input value={settings.aiModels?.[item.id] || ''} onChange={(event) => setSettings((current) => ({ ...current, aiModels: { ...current.aiModels, [item.id]: event.target.value } }))} onBlur={(event) => update({ aiModels: { [item.id]: event.target.value } })} />
+        </div>)}
+      </div>
+
+      <div className="card">
+        <h3>Azure DevOps</h3>
+        <p className="muted">Connect an organization to load user stories, child work items, descriptions, and comments during deployment.</p>
+        <label>Organization URL</label>
+        <input value={settings.azureDevOpsOrgUrl || ''} onChange={(event) => setSettings((current) => ({ ...current, azureDevOpsOrgUrl: event.target.value }))} onBlur={(event) => update({ azureDevOpsOrgUrl: event.target.value })} placeholder="https://dev.azure.com/your-organization" />
+        <label style={{ marginTop: 14 }}>Personal access token (Work Items: Read)</label>
+        <CredentialControl name="azureDevOps" label="Azure DevOps" hint="Paste access token" saved={!!credentialStatus.azureDevOps} draft={draftKeys.azureDevOps || ''} editing={!!editingKeys.azureDevOps} revealed={revealedKeys.azureDevOps} busy={credentialBusy} revealBusy={revealBusy === 'azureDevOps'} onChange={(value) => setDraftKeys((current) => ({ ...current, azureDevOps: value }))} onSave={() => saveCredential('azureDevOps')} onRemove={() => removeCredential('azureDevOps')} onReveal={() => revealCredential('azureDevOps')} onHide={() => hideCredential('azureDevOps')} onReplace={() => { hideCredential('azureDevOps'); setEditingKeys((current) => ({ ...current, azureDevOps: true })); }} onCancel={() => { setDraftKeys((current) => ({ ...current, azureDevOps: '' })); setEditingKeys((current) => ({ ...current, azureDevOps: false })); }} />
+        <p className="muted" style={{ marginBottom: 0 }}>The token stays on this computer in encrypted storage. It is sent only to the configured Azure DevOps organization.</p>
+        <div style={{ marginTop: 18 }}>
+          <label>Preview user stories or work items (separate IDs with commas)</label>
+          <div className="credential-controls">
+            <input value={previewReference} onChange={(event) => setPreviewReference(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && previewReference.trim()) previewWorkItem(); }} placeholder="AB#1234, 5678, 9012" />
+            <button className="btn small secondary" disabled={!previewReference.trim() || previewBusy} onClick={previewWorkItem}>{previewBusy ? <span className="spin" /> : 'Fetch details'}</button>
+          </div>
+          {previewBusy && previewProgress && <div className="muted" style={{ marginTop: 8 }}>Loaded {previewProgress.loaded} items · {previewProgress.queued} queued across {previewProgress.roots} stories…</div>}
+          {previewError && <div className="alert warn" style={{ marginTop: 10 }}>{previewError}</div>}
+          {previewDetails && <WorkItemDetails details={previewDetails} />}
+        </div>
+      </div>
+      {credentialError && <div className="alert err">{credentialError}</div>}
+      {credentialMessage && <div className="alert info">{credentialMessage}</div>}
     </div>
   );
 }

@@ -28,20 +28,26 @@ function defaultSettings() {
   return {
     storageMode: 'local', // 'local' | 'onedrive'
     localFolder: path.join(baseDir, 'solutions'),
-    oneDriveRoot: 'PowerApps Helper'
+    oneDriveRoot: 'PowerApps Helper',
+    azureDevOpsOrgUrl: '',
+    azureFoundryEndpoint: '',
+    aiModels: { openai: 'gpt-4.1-mini', claude: 'claude-sonnet-4-5-20250929', grok: 'grok-4', gemini: 'gemini-2.5-flash', foundry: '' }
   };
 }
 
 function getSettings() {
   try {
-    return { ...defaultSettings(), ...JSON.parse(fs.readFileSync(settingsFile, 'utf8')) };
+    const defaults = defaultSettings();
+    const saved = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+    return { ...defaults, ...saved, aiModels: { ...defaults.aiModels, ...saved.aiModels } };
   } catch {
     return defaultSettings();
   }
 }
 
 function saveSettings(patch) {
-  const next = { ...getSettings(), ...patch };
+  const current = getSettings();
+  const next = { ...current, ...patch, aiModels: { ...current.aiModels, ...patch.aiModels } };
   fs.writeFileSync(settingsFile, JSON.stringify(next, null, 2));
   return next;
 }
@@ -89,6 +95,15 @@ function updateDeployment(id, patch) {
   return data.deployments[idx];
 }
 
+function deleteDeployments(ids) {
+  const wanted = new Set(ids);
+  const data = readAll();
+  const before = data.deployments.length;
+  data.deployments = data.deployments.filter((item) => !wanted.has(item.id));
+  writeAll(data);
+  return { deleted: before - data.deployments.length };
+}
+
 module.exports = {
   init,
   artifactsDir,
@@ -97,5 +112,6 @@ module.exports = {
   listDeployments,
   getDeployment,
   addDeployment,
-  updateDeployment
+  updateDeployment,
+  deleteDeployments
 };

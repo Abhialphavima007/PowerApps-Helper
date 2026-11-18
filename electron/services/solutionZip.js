@@ -46,7 +46,14 @@ function inspect(zipPath) {
   }
 
   // MissingDependencies — dependencies required by this solution but not included.
-  const dependencies = parseMissingDependencies(solutionXml) ;
+  const dependencies = parseMissingDependencies(solutionXml);
+  const rootComponentRefs = [];
+  const rootRe = /<RootComponent\b[^>]*\/?>/gi;
+  let root;
+  while ((root = rootRe.exec(solutionXml)) !== null) {
+    const attrs = extractNode(root[0], 'RootComponent');
+    if (attrs.id && attrs.type) rootComponentRefs.push({ id: attrs.id, type: Number(attrs.type) });
+  }
 
   // Content summary from customizations.xml.
   const summary = {
@@ -64,41 +71,50 @@ function inspect(zipPath) {
     managed: managed === '1',
     publisher,
     components,
+    rootComponentRefs,
     dependencies,
     summary
   };
 }
 
 function parseMissingDependencies(xml) {
-  const block = firstMatch(xml, /<MissingDependencies>([\s\S]*?)<\/MissingDependencies>/i);
-  if (!block) return [];
+  if (typeof xml !== 'string' || !xml) return [];
   const deps = [];
-  const depRe = /<MissingDependency>([\s\S]*?)<\/MissingDependency>/gi;
-  let d;
-  while ((d = depRe.exec(block)) !== null) {
-    const seg = d[1];
-    const required = extractNode(seg, 'Required');
-    const dependent = extractNode(seg, 'Dependent');
-    deps.push({
-      requiredType: componentTypeName(required.type),
-      requiredSchema: required.schemaName || required.displayName || required.key || '',
-      dependentType: componentTypeName(dependent.type),
-      dependentSchema: dependent.schemaName || dependent.displayName || dependent.key || ''
-    });
+  const blockRe = /<(?:\w+:)?MissingDependencies\b[^>]*>([\s\S]*?)<\/(?:\w+:)?MissingDependencies>/gi;
+  let block;
+  while ((block = blockRe.exec(xml)) !== null) {
+    const depRe = /<(?:\w+:)?MissingDependency\b[^>]*>([\s\S]*?)<\/(?:\w+:)?MissingDependency>/gi;
+    let d;
+    while ((d = depRe.exec(block[1])) !== null) {
+      const required = extractNode(d[1], 'Required');
+      const dependent = extractNode(d[1], 'Dependent');
+      deps.push({
+        requiredId: required.id || '',
+        requiredTypeCode: required.type || '',
+        requiredType: componentTypeName(required.type),
+        requiredSchema: required.schemaName || required.displayName || required.key || '',
+        requiredSolution: required.solution || '',
+        dependentId: dependent.id || '',
+        dependentType: componentTypeName(dependent.type),
+        dependentSchema: dependent.schemaName || dependent.displayName || dependent.key || ''
+      });
+    }
   }
   return deps;
 }
 
 function extractNode(seg, tag) {
-  const m = seg.match(new RegExp('<' + tag + '\\b([^>]*)\\/?>', 'i'));
+  const m = seg.match(new RegExp('<(?:\\w+:)?' + tag + '\\b([^>]*)\\/?>', 'i'));
   if (!m) return {};
   const attrs = m[1];
-  const get = (a) => (attrs.match(new RegExp(a + '="([^"]*)"', 'i')) || [])[1] || '';
+  const get = (a) => (attrs.match(new RegExp('(?:^|\\s)' + a + '=["\\x27]([^"\\x27]*)["\\x27]', 'i')) || [])[1] || '';
   return {
     type: get('type'),
+    id: get('id').replace(/[{}]/g, ''),
     schemaName: get('schemaName'),
     displayName: get('displayName'),
-    key: get('key')
+    key: get('key'),
+    solution: get('solution')
   };
 }
 
@@ -136,4 +152,4 @@ function componentTypeName(code) {
   return map[String(code)] || (code ? 'Type ' + code : 'Unknown');
 }
 
-module.exports = { inspect, componentTypeName };
+module.exports = { inspect, parseMissingDependencies, componentTypeName };

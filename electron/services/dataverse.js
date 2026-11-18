@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const auth = require('./auth');
+const solutionZip = require('./solutionZip');
 
 const API_VERSION = 'v9.2';
 
@@ -58,7 +59,7 @@ async function listSolutions(orgUrl) {
   const q =
     '/api/data/' +
     API_VERSION +
-    "/solutions?$select=uniquename,friendlyname,version,ismanaged,solutionid&$filter=isvisible eq true&$orderby=friendlyname asc";
+    "/solutions?$select=uniquename,friendlyname,version,ismanaged,solutionid&$filter=isvisible eq true and ismanaged eq false&$orderby=friendlyname asc";
   const data = await request(orgUrl, q);
   const solutions = (data.value || []).map((s) => ({
     solutionId: s.solutionid,
@@ -74,6 +75,20 @@ async function setSolutionVersion(orgUrl, solutionId, version) {
   await request(orgUrl, `/api/data/${API_VERSION}/solutions(${solutionId})`, {
     method: 'PATCH',
     body: { version }
+  });
+  return { ok: true };
+}
+
+async function addSolutionComponent(orgUrl, solutionUniqueName, componentId, componentType) {
+  await request(orgUrl, '/api/data/' + API_VERSION + '/AddSolutionComponent', {
+    method: 'POST',
+    body: {
+      ComponentId: componentId,
+      ComponentType: componentType,
+      SolutionUniqueName: solutionUniqueName,
+      AddRequiredComponents: false,
+      DoNotIncludeSubcomponents: true
+    }
   });
   return { ok: true };
 }
@@ -96,6 +111,17 @@ async function exportToFile(orgUrl, solutionUniqueName, managed, outFile) {
 
 // ---- Import (async with progress polling) ----
 // onProgress(percent|null, message) — percent comes from the import job (0-100).
+async function importFailure(orgUrl, importJobId, error, asyncOperationId = null) {
+  let dependencies = [];
+  let importLog = '';
+  try {
+    const job = await request(orgUrl, `/api/data/${API_VERSION}/importjobs(${importJobId})?$select=data`);
+    importLog = typeof job.data === 'string' ? job.data : '';
+    dependencies = solutionZip.parseMissingDependencies(importLog);
+  } catch { /* Some failed imports do not create an import job. */ }
+  return { ok: false, error, importJobId, asyncOperationId, dependencies, importLog: importLog.slice(0, 12000) };
+}
+
 async function importSolutionFromFile(orgUrl, file, { overwrite = true, publishWorkflows = true } = {}, onProgress) {
   const b64 = fs.readFileSync(file).toString('base64');
   const importJobId = crypto.randomUUID();
@@ -116,11 +142,12 @@ async function importSolutionFromFile(orgUrl, file, { overwrite = true, publishW
   } catch (e) {
     if (e.status === 404) {
       report(null, 'Async import unavailable; importing synchronously (this can take a while)…');
-      await request(orgUrl, `/api/data/${API_VERSION}/ImportSolution`, { method: 'POST', body });
+      try { await request(orgUrl, `/api/data/${API_VERSION}/ImportSolution`, { method: 'POST', body }); }
+      catch (error) { return importFailure(orgUrl, importJobId, error.message); }
       report(100, 'Import completed.');
       return { ok: true, importJobId };
     }
-    throw e;
+    return importFailure(orgUrl, importJobId, e.message);
   }
 
   if (!asyncOperationId) { report(100, 'Import submitted.'); return { ok: true, importJobId }; }
@@ -158,7 +185,7 @@ async function importSolutionFromFile(orgUrl, file, { overwrite = true, publishW
         report(100, 'Import completed.');
         return { ok: true, importJobId, asyncOperationId };
       }
-      return { ok: false, error: op.friendlymessage || op.message || 'Import failed', importJobId, asyncOperationId };
+      return importFailure(orgUrl, importJobId, op.friendlymessage || op.message || 'Import failed', asyncOperationId);
     }
   }
   return { ok: false, error: 'Import timed out while waiting for completion.', importJobId, asyncOperationId };
@@ -185,6 +212,7 @@ module.exports = {
   discoverEnvironments,
   listSolutions,
   setSolutionVersion,
+  addSolutionComponent,
   exportSolution,
   exportToFile,
   importSolutionFromFile,

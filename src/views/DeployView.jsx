@@ -1,18 +1,20 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
+import WorkItemDetails from '../components/WorkItemDetails.jsx';
+import FullscreenSummary from '../components/FullscreenSummary.jsx';
 
 const STEPS = [
   { key: 'config', label: 'Configure', hint: 'Source, target, type' },
-  { key: 'analyze', label: 'Analyze', hint: 'Dependencies & content' },
-  { key: 'notes', label: 'Notes', hint: 'Deployment notes' },
+  { key: 'analyze', label: 'Review', hint: 'Dependencies & notes' },
   { key: 'deploy', label: 'Deploy', hint: 'Import to target' }
 ];
 
 const STAGE_LABELS = {
   version: 'Set version', export: 'Export from source', analyze: 'Analyze package',
-  store: 'Store artifact', import: 'Import to target', publish: 'Publish customizations'
+  store: 'Store artifact', agent: 'Deployment agent', import: 'Import to target',
+  repair: 'Add source dependencies', reexport: 'Re-export source', publish: 'Publish customizations'
 };
-const STAGE_ORDER = ['version', 'export', 'analyze', 'store', 'import', 'publish'];
+const STAGE_ORDER = ['version', 'export', 'analyze', 'store', 'agent', 'import', 'repair', 'reexport', 'publish'];
 
 function bumpVersion(v) {
   if (!v) return '1.0.0.1';
@@ -30,6 +32,96 @@ function TypePill({ managed }) {
   return <span className={'pill ' + (managed ? 'managed' : 'unmanaged')}>{managed ? 'Managed' : 'Unmanaged'}</span>;
 }
 
+function ProviderSelect({ provider, setProvider, providers }) {
+  return <select value={provider} onChange={(event) => setProvider(event.target.value)}>
+    <option value="foundry" disabled={!providers.foundry}>Azure AI Foundry {providers.foundry ? '' : '(configure in Settings)'}</option>
+    <option value="openai" disabled={!providers.openai}>OpenAI / Codex {providers.openai ? '' : '(no key)'}</option>
+    <option value="claude" disabled={!providers.claude}>Claude {providers.claude ? '' : '(no key)'}</option>
+    <option value="grok" disabled={!providers.grok}>Grok {providers.grok ? '' : '(no key)'}</option>
+    <option value="gemini" disabled={!providers.gemini}>Gemini {providers.gemini ? '' : '(no key)'}</option>
+    <option value="template">Template (no AI)</option>
+  </select>;
+}
+
+function SolutionCombobox({ solutions, selected, onSelect, disabled, loading }) {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
+  const inputRef = useRef(null);
+  const matches = useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase();
+    return needle ? solutions.filter((s) => `${s.friendlyName} ${s.uniqueName}`.toLocaleLowerCase().includes(needle)) : solutions;
+  }, [solutions, query]);
+  const displayName = selected ? `${selected.friendlyName} (${selected.uniqueName})` : '';
+  const openList = () => {
+    if (disabled) return;
+    setQuery('');
+    setActive(0);
+    setOpen(true);
+  };
+  const choose = (solution) => {
+    onSelect(solution.uniqueName);
+    setQuery('');
+    setOpen(false);
+  };
+  const handleKeyDown = (event) => {
+    if (event.key === 'Escape') {
+      setOpen(false);
+      setQuery('');
+      return;
+    }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      if (!open) openList();
+      else setActive((index) => Math.max(0, Math.min(matches.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1))));
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      if (!open) openList();
+      else if (matches[active]) choose(matches[active]);
+    }
+  };
+
+  return <div className="solution-combobox" onBlur={(event) => {
+    if (!event.currentTarget.contains(event.relatedTarget)) { setOpen(false); setQuery(''); }
+  }}>
+    <div className="solution-combobox-field">
+      <input
+        ref={inputRef}
+        id="solution-search"
+        role="combobox"
+        aria-autocomplete="list"
+        aria-controls="solution-options"
+        aria-expanded={open}
+        aria-activedescendant={open && matches[active] ? `solution-option-${active}` : undefined}
+        value={open ? query : displayName}
+        onFocus={() => { if (!open) openList(); }}
+        onChange={(event) => { setQuery(event.target.value); setActive(0); setOpen(true); onSelect(''); }}
+        onKeyDown={handleKeyDown}
+        disabled={disabled}
+        placeholder={loading ? 'Loading solutions…' : disabled ? 'Pick a source first' : 'Type or choose a solution…'}
+      />
+      <button type="button" aria-label="Show solutions" aria-expanded={open} disabled={disabled} onMouseDown={(event) => event.preventDefault()} onClick={() => {
+        if (open) setOpen(false);
+        else { openList(); inputRef.current?.focus(); }
+      }}>▾</button>
+    </div>
+    {open && <div className="solution-combobox-options" id="solution-options" role="listbox" aria-label="Solutions">
+      {matches.length ? matches.map((solution, index) => <button
+        id={`solution-option-${index}`}
+        key={solution.uniqueName}
+        type="button"
+        role="option"
+        aria-selected={selected?.uniqueName === solution.uniqueName}
+        className={index === active ? 'active' : ''}
+        onMouseDown={(event) => event.preventDefault()}
+        onMouseEnter={() => setActive(index)}
+        onClick={() => choose(solution)}
+      >{solution.friendlyName} <span className="muted">({solution.uniqueName}) · v{solution.version}</span></button>) : <div className="solution-combobox-empty">{solutions.length ? 'No matching unmanaged solutions' : 'No unmanaged solutions found'}</div>}
+    </div>}
+  </div>;
+}
+
 export default function DeployView({ account, envs, envLoading, envError, refreshEnvs, providers }) {
   const [mode, setMode] = useState('source'); // 'source' | 'file'
   const [step, setStep] = useState('config');
@@ -37,10 +129,21 @@ export default function DeployView({ account, envs, envLoading, envError, refres
   const [targetUrl, setTargetUrl] = useState('');
   const [solutions, setSolutions] = useState([]);
   const [solLoading, setSolLoading] = useState(false);
+  const solutionRequest = useRef(0);
   const [solutionName, setSolutionName] = useState('');
   const [version, setVersion] = useState('');
   const [description, setDescription] = useState('');
   const [workItems, setWorkItems] = useState('');
+  const [workItemDetails, setWorkItemDetails] = useState(null);
+  const [workItemError, setWorkItemError] = useState('');
+  const [workItemLoading, setWorkItemLoading] = useState(false);
+  const [workItemProgress, setWorkItemProgress] = useState(null);
+  const [workSummary, setWorkSummary] = useState('');
+  const [summaryExpanded, setSummaryExpanded] = useState(false);
+  const [summaryBusy, setSummaryBusy] = useState(false);
+  const [summaryProgress, setSummaryProgress] = useState(null);
+  const workRequest = useRef(0);
+  const workTimer = useRef(null);
   const [deployType, setDeployType] = useState('managed'); // default managed, like pipelines
   const [publishChanges, setPublishChanges] = useState(true);
   const [forceOverwrite, setForceOverwrite] = useState(true);
@@ -52,7 +155,7 @@ export default function DeployView({ account, envs, envLoading, envError, refres
   const [error, setError] = useState('');
   const [progress, setProgress] = useState({});
   const [analysis, setAnalysis] = useState(null);
-  const [notes, setNotes] = useState('');
+  const [notes, setNotes] = useState(null);
   const [notesWarning, setNotesWarning] = useState('');
   const [provider, setProvider] = useState('gemini');
   const [genBusy, setGenBusy] = useState(false);
@@ -60,7 +163,8 @@ export default function DeployView({ account, envs, envLoading, envError, refres
   const [record, setRecord] = useState(null);
   const [gitCommit, setGitCommit] = useState(false);
 
-  useEffect(() => { setProvider(providers.gemini ? 'gemini' : providers.grok ? 'grok' : 'template'); }, [providers]);
+  useEffect(() => { setProvider(providers.foundry ? 'foundry' : providers.openai ? 'openai' : providers.claude ? 'claude' : providers.grok ? 'grok' : providers.gemini ? 'gemini' : 'template'); }, [providers]);
+  useEffect(() => { setNotes(null); setNotesWarning(''); }, [mode, sourceUrl, targetUrl, solutionName, filePath]);
   useEffect(() => {
     const off = api.deploy.onProgress((d) => setProgress((prev) => ({ ...prev, [d.stage]: { status: d.status, percent: d.percent, message: d.message } })));
     return off;
@@ -69,22 +173,64 @@ export default function DeployView({ account, envs, envLoading, envError, refres
   const selectedSolution = useMemo(() => solutions.find((s) => s.uniqueName === solutionName), [solutions, solutionName]);
 
   const loadSolutions = async (url) => {
-    if (!url) return;
+    const request = ++solutionRequest.current;
     setSolLoading(true); setSolutions([]); setSolutionName('');
+    if (!url) { setSolLoading(false); return; }
     try {
       const r = await api.solution.list(url);
-      if (r.ok) setSolutions(r.solutions || []); else setError(r.error || 'Could not list solutions.');
-    } finally { setSolLoading(false); }
+      if (request !== solutionRequest.current) return;
+      if (r.ok) setSolutions((r.solutions || []).filter((solution) => !solution.isManaged)); else setError(r.error || 'Could not list solutions.');
+    } catch (e) {
+      if (request === solutionRequest.current) setError(String(e));
+    } finally { if (request === solutionRequest.current) setSolLoading(false); }
   };
   const onSource = (url) => { setSourceUrl(url); loadSolutions(url); };
   useEffect(() => { if (selectedSolution) setVersion(bumpVersion(selectedSolution.version)); }, [selectedSolution]);
 
+  const fetchWorkItems = async (references) => {
+    const request = ++workRequest.current;
+    setWorkItemLoading(true); setWorkItemError(''); setWorkItemProgress(null);
+    try {
+      const result = await api.devops.fetch(references, (progress) => { if (request === workRequest.current) setWorkItemProgress(progress); });
+      if (request !== workRequest.current) return;
+      if (!result.ok) throw new Error(result.error || 'Could not load Azure DevOps work items.');
+      setWorkItemDetails(result);
+    } catch (error) {
+      if (request === workRequest.current) { setWorkItemDetails(null); setWorkItemError(String(error.message || error)); }
+    } finally {
+      if (request === workRequest.current) setWorkItemLoading(false);
+    }
+  };
+  useEffect(() => {
+    ++workRequest.current;
+    setWorkItemDetails(null); setWorkItemError(''); setWorkItemLoading(false); setWorkItemProgress(null);
+    if (!workItems.split(/[,;\s]+/).some((part) => /^(?:AB#|#)?\d+$|\/_workitems\/edit\/\d+/i.test(part.trim()))) return;
+    workTimer.current = setTimeout(() => fetchWorkItems(workItems), 900);
+    return () => clearTimeout(workTimer.current);
+  }, [workItems]);
+
+  const generateWorkSummary = async () => {
+    const request = workRequest.current;
+    setSummaryBusy(true); setSummaryProgress(null); setWorkItemError('');
+    try {
+      const result = await api.ai.summarizeWorkItems({ provider, workItemDetails }, setSummaryProgress);
+      if (request !== workRequest.current) return;
+      if (!result.ok) throw new Error(result.error || 'AI summary failed.');
+      setDescription((current) => workSummary && current.includes(workSummary)
+        ? current.replace(workSummary, result.summary)
+        : [current.trim(), result.summary].filter(Boolean).join('\n\n'));
+      setWorkSummary(result.summary);
+    } catch (error) { setWorkItemError(String(error.message || error)); }
+    finally { setSummaryBusy(false); }
+  };
+
   // Effective managed flag for the current deployment.
   const managed = mode === 'file' ? !!analysis?.inspection?.managed : deployType === 'managed';
+  const effectiveNotes = notes === null ? description : notes;
 
   const resetProgress = (keys) => setProgress((prev) => { const next = { ...prev }; keys.forEach((k) => delete next[k]); return next; });
 
-  const canAnalyzeSource = sourceUrl && targetUrl && solutionName && sourceUrl !== targetUrl;
+  const canAnalyzeSource = sourceUrl && targetUrl && selectedSolution && !selectedSolution.isManaged && sourceUrl !== targetUrl;
   const canAnalyzeFile = targetUrl && filePath;
 
   const runAnalyzeSource = async () => {
@@ -114,6 +260,11 @@ export default function DeployView({ account, envs, envLoading, envError, refres
 
   const runAnalyzeFile = () => { if (analysis) setStep('analyze'); };
 
+  const continueWithAgent = () => {
+    setError(''); setAnalysis(null); setImportResult(null); setRecord(null);
+    setProgress({}); setStep('deploy');
+  };
+
   const generateNotes = async () => {
     setError(''); setNotesWarning(''); setGenBusy(true);
     try {
@@ -124,7 +275,7 @@ export default function DeployView({ account, envs, envLoading, envError, refres
         targetEnv: envName(envs, targetUrl),
         version: mode === 'file' ? analysis?.inspection?.version : version,
         description, workItems, developer: account?.name || account?.username,
-        exportManaged: managed, inspection: analysis?.inspection
+        exportManaged: managed, inspection: analysis?.inspection, workItemDetails
       });
       if (r.ok) {
         setNotes(r.notes || '');
@@ -149,10 +300,10 @@ export default function DeployView({ account, envs, envLoading, envError, refres
         sourceEnv: mode === 'file' ? 'Package file' : envName(envs, sourceUrl),
         sourceUrl: mode === 'file' ? '' : sourceUrl,
         targetEnv: envName(envs, targetUrl), targetUrl, account: account?.username,
-        description, workItems, exportManaged: managed, mode,
+        description, workItems, workItemDetails, workItemSummary: workSummary, exportManaged: managed, mode,
         artifact: analysis.artifact, stored: analysis.stored || {},
         dependencies: analysis.inspection?.dependencies || [], summary: analysis.inspection?.summary || {},
-        notes, status: r.ok ? 'success' : 'failed', error: r.ok ? null : r.error
+        notes: effectiveNotes, status: r.ok ? 'success' : 'failed', warning: r.warning || null, error: r.ok ? null : r.error
       });
       setRecord(rec);
       if (gitCommit) {
@@ -162,9 +313,47 @@ export default function DeployView({ account, envs, envLoading, envError, refres
     } catch (e) { setError(String(e)); } finally { setBusy(false); }
   };
 
+  const runAgent = async () => {
+    const snapshot = {
+      mode: 'source',
+      accountId: account?.homeAccountId,
+      account: account?.username,
+      sourceUrl,
+      sourceEnv: envName(envs, sourceUrl),
+      targetUrl,
+      targetEnv: envName(envs, targetUrl),
+      solution: selectedSolution?.friendlyName || solutionName,
+      solutionUniqueName: solutionName,
+      solutionId: selectedSolution?.solutionId,
+      version,
+      exportManaged: managed,
+      publishChanges,
+      overwrite: forceOverwrite,
+      description,
+      workItems,
+      workItemDetails,
+      workItemSummary: workSummary,
+      notes: effectiveNotes,
+      gitCommit,
+      deferExport: !analysis,
+      analysis
+    };
+    setError(''); setBusy(true); resetProgress(STAGE_ORDER); setImportResult(null); setRecord(null);
+    try {
+      const result = await api.deploy.runAgent(snapshot);
+      setImportResult({ ...result, agent: true });
+      if (result.analysis) setAnalysis(result.analysis);
+      if (result.record) setRecord(result.record);
+      if (!result.ok && !result.record) setError(result.error || 'Agent deployment failed.');
+    } catch (error) { setError(String(error.message || error)); }
+    finally { setBusy(false); }
+  };
+
   const reset = () => {
-    setStep('config'); setAnalysis(null); setNotes(''); setNotesWarning('');
+    setStep('config'); setAnalysis(null); setNotes(null); setNotesWarning('');
     setImportResult(null); setRecord(null); setError(''); setProgress({}); setFilePath('');
+    setDescription(''); setWorkItems(''); setWorkItemDetails(null); setWorkSummary('');
+    setSummaryExpanded(false);
   };
 
   const stepIndex = STEPS.findIndex((s) => s.key === step);
@@ -218,25 +407,15 @@ export default function DeployView({ account, envs, envLoading, envError, refres
               </div>
               <div className="row" style={{ marginTop: 14 }}>
                 <div className="col">
-                  <label>Solution {solLoading && <span className="spin" />} {selectedSolution && <TypePill managed={selectedSolution.isManaged} />}</label>
-                  <select value={solutionName} onChange={(e) => setSolutionName(e.target.value)} disabled={!sourceUrl}>
-                    <option value="">{sourceUrl ? 'Select solution…' : 'Pick a source first'}</option>
-                    {solutions.map((s) => (
-                      <option key={s.uniqueName} value={s.uniqueName}>{s.friendlyName} ({s.uniqueName}) v{s.version} · {s.isManaged ? 'Managed' : 'Unmanaged'}</option>
-                    ))}
-                  </select>
+                  <label htmlFor="solution-search">Unmanaged source solution {solLoading && <span className="spin" />}</label>
+                  <SolutionCombobox key={sourceUrl || 'no-source'} solutions={solutions} selected={selectedSolution} onSelect={setSolutionName} disabled={!sourceUrl || solLoading} loading={solLoading} />
+                  <p className="muted" style={{ margin: '6px 0 0' }}>Only unmanaged source solutions are listed. You can export one as a managed or unmanaged package below.</p>
                 </div>
                 <div className="col" style={{ maxWidth: 200 }}>
                   <label>New version {selectedSolution ? `(was ${selectedSolution.version})` : ''}</label>
                   <input value={version} onChange={(e) => setVersion(e.target.value)} placeholder="1.0.0.1" />
                 </div>
               </div>
-
-              {selectedSolution?.isManaged && (
-                <div className="alert warn" style={{ marginTop: 12 }}>
-                  This solution is <b>managed</b> in the source — managed solutions can't be re-exported. To promote a managed solution downstream, use <b>Deploy existing package (.zip)</b> with the managed artifact (the app stores one on each export).
-                </div>
-              )}
 
               <div style={{ marginTop: 14 }}>
                 <label>Deploy as</label>
@@ -281,12 +460,28 @@ export default function DeployView({ account, envs, envLoading, envError, refres
           )}
 
           <div style={{ marginTop: 14 }}>
-            <label>What changes are going with this solution? (used for deployment notes)</label>
-            <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="e.g. Added Approval status field to Case table, updated routing flow, new admin role…" />
+            <label>Related work items / references (optional)</label>
+            <div className="row" style={{ alignItems: 'center' }}>
+              <input value={workItems} onChange={(e) => setWorkItems(e.target.value)} placeholder="e.g. AB#1234, 5678 or Azure DevOps work item URLs" />
+              <button className="btn secondary" disabled={!workItems.trim() || workItemLoading} onClick={() => { clearTimeout(workTimer.current); fetchWorkItems(workItems); }}>{workItemLoading ? <span className="spin" /> : 'Refresh details'}</button>
+            </div>
+            {workItemError && <div className="alert warn" style={{ marginTop: 10 }}>{workItemError}</div>}
+            {workItemLoading && workItemProgress && <p className="muted">Loaded {workItemProgress.loaded} items · {workItemProgress.queued} queued across {workItemProgress.roots} stories…</p>}
+            {workItemDetails && <WorkItemDetails details={workItemDetails} />}
+            {workItemDetails && <p className="muted">Fetched work item details will be saved with this deployment's history record.</p>}
+            {workItemDetails && <div className="row" style={{ alignItems: 'flex-end', marginTop: 12 }}>
+              <div className="col" style={{ maxWidth: 260 }}><label>AI provider for summary</label><ProviderSelect provider={provider} setProvider={setProvider} providers={providers} /></div>
+              <button className="btn secondary" disabled={summaryBusy || provider === 'template'} onClick={generateWorkSummary}>{summaryBusy ? <span className="spin" /> : 'AI summary → Add to changes'}</button>
+            </div>}
+            {workItemDetails && provider === 'template' && <p className="muted">Add an AI API key in Settings to enable an AI summary.</p>}
+            {summaryBusy && summaryProgress && <p className="muted">AI analyzed {summaryProgress.completed} of {summaryProgress.total} parts…</p>}
           </div>
           <div style={{ marginTop: 14 }}>
-            <label>Related work items / references (optional)</label>
-            <input value={workItems} onChange={(e) => setWorkItems(e.target.value)} placeholder="e.g. AB#1234, JIRA-56 (comma separated)" />
+            <div className="summary-field-heading">
+              <label htmlFor="change-summary">What changes are going with this solution? (used for deployment notes)</label>
+              <button className="btn small secondary" disabled={!description.trim()} onClick={() => setSummaryExpanded(true)}>View full screen</button>
+            </div>
+            <textarea id="change-summary" className="change-summary-textarea" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Describe changes yourself, or fetch work items and add an AI summary above…" />
           </div>
 
           <div className="row" style={{ marginTop: 14 }}>
@@ -296,85 +491,102 @@ export default function DeployView({ account, envs, envLoading, envError, refres
 
           <div className="right">
             {mode === 'source' ? (
-              <button className="btn" disabled={!canAnalyzeSource || busy} onClick={runAnalyzeSource}>{busy ? <span className="spin" /> : 'Export & analyze →'}</button>
+              <>
+                <button className="btn secondary" disabled={!canAnalyzeSource || busy} onClick={runAnalyzeSource}>{busy ? <span className="spin" /> : 'Export & review →'}</button>
+                <button className="btn agent-button" disabled={!canAnalyzeSource || busy} onClick={continueWithAgent}>Continue with agent →</button>
+              </>
             ) : (
               <button className="btn" disabled={!canAnalyzeFile || busy} onClick={runAnalyzeFile}>Analyze & continue →</button>
             )}
           </div>
+          {mode === 'source' && <p className="muted agent-help">Continue with agent to review the deployment before exporting. The agent exports when you start it; package dependency warnings alone do not trigger source changes.</p>}
           {mode === 'source' && sourceUrl && sourceUrl === targetUrl && <div className="alert warn" style={{ marginTop: 12 }}>Source and target must differ.</div>}
           {(busy || activeStages.length > 0) && <ProgressPanel stages={activeStages} progress={progress} />}
         </div>
       )}
 
       {step === 'analyze' && analysis && (
-        <AnalyzeStep analysis={analysis} managed={managed} onBack={() => setStep('config')} onNext={() => setStep('notes')} onReveal={() => api.util.revealPath(analysis.artifact)} />
-      )}
-
-      {step === 'notes' && (
-        <div className="card">
-          <h3>Deployment notes</h3>
-          <div className="toolbar">
-            <div style={{ maxWidth: 240 }}>
-              <label>Style / provider</label>
-              <select value={provider} onChange={(e) => setProvider(e.target.value)}>
-                <option value="gemini" disabled={!providers.gemini}>Gemini {providers.gemini ? '' : '(no key)'}</option>
-                <option value="grok" disabled={!providers.grok}>Grok {providers.grok ? '' : '(no key)'}</option>
-                <option value="template">Template (no AI)</option>
-              </select>
+        <>
+          <AnalyzeStep analysis={analysis} managed={managed} onReveal={() => api.util.revealPath(analysis.artifact)} />
+          <div className="card">
+            <h3>Deployment notes</h3>
+            <p className="muted">Your change summary is already included below. Edit it here, or generate formatted notes using the package analysis.</p>
+            <div className="toolbar">
+              <div style={{ maxWidth: 240 }}>
+                <label>Format with</label>
+                <ProviderSelect provider={provider} setProvider={setProvider} providers={providers} />
+              </div>
+              <div style={{ alignSelf: 'flex-end' }}>
+                <button className="btn secondary" disabled={genBusy} onClick={generateNotes}>{genBusy ? <span className="spin" /> : notes === null ? 'Generate formatted notes' : 'Regenerate notes'}</button>
+              </div>
             </div>
-            <div style={{ alignSelf: 'flex-end' }}>
-              <button className="btn secondary" disabled={genBusy} onClick={generateNotes}>{genBusy ? <span className="spin" /> : notes ? 'Regenerate' : 'Generate notes'}</button>
+            {notesWarning && <div className="alert info">{notesWarning}</div>}
+            <label htmlFor="deployment-notes">Notes saved with this deployment</label>
+            <textarea id="deployment-notes" style={{ minHeight: 220 }} value={effectiveNotes} onChange={(e) => setNotes(e.target.value)} placeholder="Write deployment notes or generate formatted notes…" />
+            <div className="right">
+              <button className="btn secondary" disabled={genBusy} onClick={() => setStep('config')}>← Back</button>
+              <button className="btn" disabled={genBusy} onClick={() => setStep('deploy')}>Continue to deploy →</button>
             </div>
           </div>
-          {notesWarning && <div className="alert info">{notesWarning}</div>}
-          <label>Notes (editable Markdown, pipeline-style)</label>
-          <textarea style={{ minHeight: 300 }} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Click Generate, or write deployment notes…" />
-          <div className="right">
-            <button className="btn secondary" onClick={() => setStep('analyze')}>← Back</button>
-            <button className="btn" onClick={() => setStep('deploy')}>Continue to deploy →</button>
-          </div>
-        </div>
+        </>
       )}
 
       {step === 'deploy' && (
         <div className="card">
           <h3>Deploy to {envName(envs, targetUrl)}</h3>
+          {mode === 'source' && !analysis && <div className="alert info">The agent will set the version, export the source solution, and import it into the target when you start deployment. It will repair dependencies only if the target import fails with identifiable missing components.</div>}
           <div className="grid2" style={{ marginBottom: 14 }}>
             <div className="k">Solution</div><div>{mode === 'file' ? (analysis?.inspection?.uniqueName || filePath.split(/[\\/]/).pop()) : (selectedSolution?.friendlyName || solutionName)}</div>
             <div className="k">Version</div><div>{mode === 'file' ? analysis?.inspection?.version : version}</div>
             <div className="k">Route</div><div>{mode === 'file' ? 'Package file' : envName(envs, sourceUrl)} → {envName(envs, targetUrl)}</div>
             <div className="k">Type</div><div><TypePill managed={managed} /></div>
-            <div className="k">Dependencies flagged</div><div>{analysis?.inspection?.dependencies?.length || 0}</div>
+            <div className="k">Dependencies flagged</div><div>{analysis ? (analysis.inspection?.dependencies?.length || 0) : 'Checked after export'}</div>
             <div className="k">Artifact</div>
             <div>
               {analysis?.stored?.storage === 'onedrive'
                 ? <button className="btn small secondary" onClick={() => api.util.openExternal(analysis.stored.oneDriveUrl)}>Open in OneDrive</button>
                 : analysis?.stored?.storedPath
                   ? <button className="btn small secondary" onClick={() => api.util.revealPath(analysis.stored.storedPath)}>Reveal file</button>
-                  : '—'}
+                  : analysis ? '—' : 'Export when agent starts'}
             </div>
           </div>
+          {mode === 'source' && !analysis && !importResult && <div style={{ marginBottom: 14 }}>
+            <label htmlFor="agent-deployment-notes">Deployment notes</label>
+            <textarea id="agent-deployment-notes" value={effectiveNotes} onChange={(event) => setNotes(event.target.value)} placeholder="Your change summary appears here. You can edit these notes before starting the agent." />
+          </div>}
           <Checkbox label="Commit artifact + notes to local git" checked={gitCommit} onChange={setGitCommit} />
           {!importResult && (
-            <div className="right">
-              <button className="btn secondary" onClick={() => setStep('notes')}>← Back</button>
-              <button className="btn" disabled={busy} onClick={runDeploy}>{busy ? <span className="spin" /> : `🚀 Import ${managed ? 'managed' : 'unmanaged'} to target`}</button>
+            <div className="right deploy-actions">
+              <button className="btn secondary" disabled={busy} onClick={() => setStep(analysis ? 'analyze' : 'config')}>← Back</button>
+              {mode === 'source' && <button className="btn agent-button" disabled={busy} onClick={runAgent}>{busy ? <span className="spin" /> : 'Deploy with agent'}</button>}
+              {analysis && <button className="btn" disabled={busy} onClick={runDeploy}>{busy ? <span className="spin" /> : `🚀 Import ${managed ? 'managed' : 'unmanaged'} to target`}</button>}
             </div>
           )}
+          {mode === 'source' && !importResult && <p className="muted agent-help">The agent imports, reads failed target-import dependencies, adds identifiable components to the source solution through Microsoft Dataverse MCP when supported (or the authenticated Dataverse API fallback), then re-exports and retries up to twice. Package dependency warnings alone do not trigger repairs. Your route, work items, description and notes stay selected.</p>}
           {(busy || activeStages.length > 0) && <ProgressPanel stages={activeStages} progress={progress} />}
           {importResult && (
             <div className={'alert ' + (importResult.ok ? 'info' : 'err')} style={{ marginTop: 14 }}>
-              {importResult.ok ? '✔ Import completed and recorded in history.' : '✖ Import failed: ' + (importResult.error || '')}
-              {record && (
-                <div className="right">
-                  {record.notesFile && <button className="btn small secondary" onClick={() => api.util.revealPath(record.notesFile)}>Open notes file</button>}
-                  <button className="btn small" onClick={reset}>New deployment</button>
-                </div>
-              )}
+              {importResult.ok ? (record ? '✔ Import completed and recorded in history.' : '✔ Import completed; history could not be saved.') : (importResult.agent ? '✖ Agent stopped: ' : '✖ Import failed: ') + (importResult.error || '')}
+              {importResult.warning && <p>{importResult.warning}</p>}
+              {importResult.attempts?.length > 0 && <p>Import attempts: {importResult.attempts.length}. Source components added: {importResult.repairs?.length || 0}.</p>}
+              {importResult.dependencies?.length > 0 && <p>Failed-import dependencies: {importResult.dependencies.map((item) => item.requiredSchema || item.requiredId || item.requiredType).join(', ')}</p>}
+              {importResult.importLog && <details><summary>View Dataverse import log</summary><pre className="log">{importResult.importLog}</pre></details>}
+              <div className="right">
+                {record?.notesFile && <button className="btn small secondary" onClick={() => api.util.revealPath(record.notesFile)}>Open notes file</button>}
+                {!importResult.ok && <button className="btn small secondary" onClick={() => { setImportResult(null); setRecord(null); resetProgress(STAGE_ORDER); }}>Retry with these details</button>}
+                <button className="btn small" onClick={reset}>New deployment</button>
+              </div>
             </div>
           )}
+          {importResult?.repairs?.length > 0 && <div className="agent-repairs">
+            <h3>Source repair actions</h3>
+            <table><thead><tr><th>Component</th><th>Method</th><th>Cycle</th></tr></thead><tbody>
+              {importResult.repairs.map((repair, index) => <tr key={index}><td>{repair.label} <span className="muted">({repair.componentId})</span></td><td>{repair.method}</td><td>{repair.cycle}</td></tr>)}
+            </tbody></table>
+          </div>}
         </div>
       )}
+      {summaryExpanded && <FullscreenSummary value={description} onClose={() => setSummaryExpanded(false)} />}
     </div>
   );
 }
@@ -404,7 +616,7 @@ function ProgressPanel({ stages, progress }) {
   );
 }
 
-function AnalyzeStep({ analysis, managed, onBack, onNext, onReveal }) {
+function AnalyzeStep({ analysis, managed, onReveal }) {
   const insp = analysis.inspection || {};
   const deps = insp.dependencies || [];
   const comps = insp.components || [];
@@ -454,11 +666,6 @@ function AnalyzeStep({ analysis, managed, onBack, onNext, onReveal }) {
           </div>
         </div>
       )}
-
-      <div className="right">
-        <button className="btn secondary" onClick={onBack}>← Back</button>
-        <button className="btn" onClick={onNext}>Continue to notes →</button>
-      </div>
     </div>
   );
 }

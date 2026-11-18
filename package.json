@@ -1,6 +1,6 @@
 {
   "name": "powerapps-helper",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Desktop app for Power Platform solution deployment, tracking, dependency review, git integration and AI-generated deployment notes.",
   "author": "Alphavima",
   "license": "MIT",
@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@azure/msal-node": "^2.13.1",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "adm-zip": "^0.5.16",
     "dotenv": "^16.4.5"
   },
@@ -44,6 +45,9 @@
       "electron/**/*",
       "dist/**/*",
       "package.json"
+    ],
+    "asarUnpack": [
+      "electron/scripts/*.ps1"
     ],
     "directories": {
       "output": "release"
