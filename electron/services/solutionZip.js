@@ -52,7 +52,12 @@ function inspect(zipPath) {
   let root;
   while ((root = rootRe.exec(solutionXml)) !== null) {
     const attrs = extractNode(root[0], 'RootComponent');
-    if (attrs.id && attrs.type) rootComponentRefs.push({ id: attrs.id, type: Number(attrs.type) });
+    if (!attrs.type || (!attrs.id && !(Number(attrs.type) === 1 && attrs.schemaName))) continue;
+    const ref = { type: Number(attrs.type) };
+    if (attrs.id) ref.id = attrs.id;
+    if (attrs.schemaName) ref.schemaName = attrs.schemaName;
+    if (attrs.behavior) ref.behavior = attrs.behavior;
+    rootComponentRefs.push(ref);
   }
 
   // Content summary from customizations.xml.
@@ -79,26 +84,37 @@ function inspect(zipPath) {
 
 function parseMissingDependencies(xml) {
   if (typeof xml !== 'string' || !xml) return [];
+  // Import errors can carry the same XML as escaped text inside an OData message.
+  for (let pass = 0; pass < 2 && /&(?:lt|gt|quot|apos|amp|#(?:x[0-9a-f]+|\d+));/i.test(xml); pass++) {
+    xml = xml.replace(/&(#x[0-9a-f]+|#\d+|lt|gt|quot|apos|amp);/gi, (match, entity) => {
+      const named = { lt: '<', gt: '>', quot: '"', apos: "'", amp: '&' };
+      if (named[entity.toLowerCase()]) return named[entity.toLowerCase()];
+      const code = entity[1].toLowerCase() === 'x' ? parseInt(entity.slice(2), 16) : parseInt(entity.slice(1), 10);
+      return Number.isInteger(code) && code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : match;
+    });
+  }
   const deps = [];
-  const blockRe = /<(?:\w+:)?MissingDependencies\b[^>]*>([\s\S]*?)<\/(?:\w+:)?MissingDependencies>/gi;
-  let block;
-  while ((block = blockRe.exec(xml)) !== null) {
-    const depRe = /<(?:\w+:)?MissingDependency\b[^>]*>([\s\S]*?)<\/(?:\w+:)?MissingDependency>/gi;
-    let d;
-    while ((d = depRe.exec(block[1])) !== null) {
-      const required = extractNode(d[1], 'Required');
-      const dependent = extractNode(d[1], 'Dependent');
-      deps.push({
-        requiredId: required.id || '',
-        requiredTypeCode: required.type || '',
-        requiredType: componentTypeName(required.type),
-        requiredSchema: required.schemaName || required.displayName || required.key || '',
-        requiredSolution: required.solution || '',
-        dependentId: dependent.id || '',
-        dependentType: componentTypeName(dependent.type),
-        dependentSchema: dependent.schemaName || dependent.displayName || dependent.key || ''
-      });
-    }
+  const depRe = /<(?:\w+:)?MissingDependency\b[^>]*>([\s\S]*?)<\/(?:\w+:)?MissingDependency>/gi;
+  let d;
+  while ((d = depRe.exec(xml)) !== null) {
+    const required = extractNode(d[1], 'Required');
+    const dependent = extractNode(d[1], 'Dependent');
+    if (!Object.keys(required).length) continue;
+    deps.push({
+      requiredId: required.id || '',
+      requiredTypeCode: required.type || '',
+      requiredType: componentTypeName(required.type),
+      requiredSchema: required.schemaName || required.displayName || required.key || '',
+      ...(required.schemaName ? { requiredSchemaName: required.schemaName } : {}),
+      requiredParentSchema: required.parentSchemaName || '',
+      requiredParentDisplayName: required.parentDisplayName || '',
+      requiredSolution: required.solution || '',
+      dependentId: dependent.id || '',
+      dependentType: componentTypeName(dependent.type),
+      dependentSchema: dependent.schemaName || dependent.displayName || dependent.key || '',
+      dependentParentSchema: dependent.parentSchemaName || '',
+      dependentParentDisplayName: dependent.parentDisplayName || ''
+    });
   }
   return deps;
 }
@@ -112,7 +128,10 @@ function extractNode(seg, tag) {
     type: get('type'),
     id: get('id').replace(/[{}]/g, ''),
     schemaName: get('schemaName'),
+    behavior: get('behavior'),
     displayName: get('displayName'),
+    parentSchemaName: get('parentSchemaName'),
+    parentDisplayName: get('parentDisplayName'),
     key: get('key'),
     solution: get('solution')
   };

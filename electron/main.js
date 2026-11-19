@@ -20,10 +20,17 @@ const azureDevOps = require('./services/azureDevOps');
 const windowsHello = require('./services/windowsHello');
 const dataverseMcp = require('./services/dataverseMcp');
 const deploymentAgent = require('./services/deploymentAgent');
+const { createDeploymentNotifier } = require('./services/deploymentNotifications');
 
 const isDev = process.env.NODE_ENV === 'development';
+const useDataverseMcp = /^true$/i.test(process.env.DATAVERSE_MCP_ENABLED || '');
 let win;
 const activeNotifications = new Set();
+const notifyDeployment = createDeploymentNotifier({
+  Notification,
+  getWindow: () => win,
+  activeNotifications
+});
 
 function createWindow() {
   win = new BrowserWindow({
@@ -51,7 +58,9 @@ app.whenReady().then(() => {
   if (process.platform === 'win32') app.setAppUserModelId('com.alphavima.powerappshelper');
   store.init(app.getPath('userData'));
   credentials.init(app.getPath('userData'));
-  auth.init(app.getPath('userData'));
+  auth.init(app.getPath('userData'), (data) => {
+    if (win && !win.isDestroyed()) win.webContents.send('auth:progress', data);
+  });
   registerIpc();
   createWindow();
   app.on('activate', () => {
@@ -62,6 +71,7 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
+app.on('before-quit', () => auth.cancelSignIn());
 
 // ---- structured progress ----
 function stage(stageName, statusVal, percent, message) {
@@ -77,27 +87,6 @@ function stage(stageName, statusVal, percent, message) {
 
 function ok(data) { return { ok: true, ...data }; }
 function fail(err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
-
-function notifyDeployment(title, message) {
-  try {
-    if (!Notification.isSupported()) return;
-    const notification = new Notification({
-      title: 'PowerApps Helper — ' + title,
-      body: String(message || '').slice(0, 220),
-      silent: false
-    });
-    activeNotifications.add(notification);
-    notification.on('close', () => activeNotifications.delete(notification));
-    notification.on('click', () => {
-      if (win && !win.isDestroyed()) {
-        if (win.isMinimized()) win.restore();
-        win.show();
-        win.focus();
-      }
-    });
-    notification.show();
-  } catch { /* The in-app result remains available when OS notifications are disabled. */ }
-}
 
 function sanitize(s) {
   return String(s || 'unknown').replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, ' ').trim().slice(0, 80);
@@ -143,9 +132,13 @@ function registerIpc() {
   let agentBusy = false;
   // --- Auth (multi-account) ---
   ipcMain.handle('auth:status', () => auth.status());
-  ipcMain.handle('auth:add', async () => {
+  ipcMain.handle('auth:add', async (_event, options) => {
     if (agentBusy) return fail(new Error('Wait for the deployment agent to finish before adding an account.'));
-    try { return ok({ account: await auth.addAccount() }); } catch (e) { return fail(e); }
+    try { return ok({ account: await auth.addAccount(options) }); } catch (e) { return fail(e); }
+  });
+  ipcMain.handle('auth:setMethod', async (_event, method) => {
+    if (agentBusy) return fail(new Error('Wait for the deployment agent to finish before changing sign-in method.'));
+    try { return await auth.setSignInMethod(method); } catch (e) { return fail(e); }
   });
   ipcMain.handle('auth:setActive', (_e, id) => agentBusy ? fail(new Error('Wait for the deployment agent to finish before switching accounts.')) : auth.setActive(id));
   ipcMain.handle('auth:signOut', (_e, id) => agentBusy ? fail(new Error('Wait for the deployment agent to finish before signing out.')) : auth.signOut(id));
@@ -299,7 +292,7 @@ function registerIpc() {
       return ok({ artifact: outFile, inspection, stored });
     } catch (e) {
       stage('export', 'error', null, e.message);
-      notifyDeployment('Export stopped', 'Open the app to review the export error.');
+      notifyDeployment('Export stopped', e.message);
       return fail(e);
     }
   });
@@ -321,7 +314,7 @@ function registerIpc() {
       };
       stage('agent', 'running', null, 'Agent deployment started.');
       const result = await deploymentAgent.runAgentDeployment(snapshot, {
-        dataverse, mcp: dataverseMcp, zip,
+        dataverse, mcp: useDataverseMcp ? dataverseMcp : null, zip,
         artifactsDir: store.artifactsDir, storeArtifact, report: stage, checkAccount
       });
       let warning = result.warning || '';
@@ -344,11 +337,13 @@ function registerIpc() {
       }
       stage('agent', result.ok ? 'done' : 'error', result.ok ? 100 : null, result.ok ? (saved ? 'Deployment recorded in history.' : 'Import finished; history could not be saved.') : result.error);
       notifyDeployment(result.ok ? (warning ? 'Deployment needs attention' : 'Deployment complete') : 'Deployment stopped',
-        result.ok ? (warning ? 'Open the app to review the warning.' : 'The solution was imported successfully.') : 'Open the app to review the error and retry.');
+        result.ok
+          ? (warning || `Imported ${snapshot.solutionUniqueName} v${snapshot.version} to ${snapshot.targetEnv}.`)
+          : (result.error || 'Agent deployment stopped before import could finish.'));
       return { ...result, warning, record: saved };
     } catch (error) {
       stage('agent', 'error', null, error.message);
-      notifyDeployment('Deployment stopped', 'Open the app to review the error and retry.');
+      notifyDeployment('Deployment stopped', error.message);
       return fail(error);
     } finally { agentBusy = false; }
   });
@@ -356,7 +351,7 @@ function registerIpc() {
   // === Import into target (async, real progress) + optional publish ===
   ipcMain.handle('deploy:import', async (_e, params) => {
     if (agentBusy) return fail(new Error('A deployment agent is already running.'));
-    const { targetEnvUrl, artifact, overwrite, publishChanges, exportManaged } = params;
+    const { targetEnvUrl, targetEnvName, solutionName, artifact, overwrite, publishChanges, exportManaged } = params;
     try {
       stage('import', 'running', 1, 'Starting import…');
       const r = await dataverse.importSolutionFromFile(
@@ -365,7 +360,7 @@ function registerIpc() {
       );
       if (!r.ok) {
         stage('import', 'error', null, r.error);
-        notifyDeployment('Import stopped', 'Open the app to review the import error.');
+        notifyDeployment('Import stopped', [solutionName, 'could not be imported to', targetEnvName, r.error].filter(Boolean).join(' '));
         return r;
       }
       stage('import', 'done', 100, 'Imported.');
@@ -382,11 +377,11 @@ function registerIpc() {
         }
       }
       notifyDeployment(publishWarning ? 'Deployment needs attention' : 'Deployment complete',
-        publishWarning ? 'Open the app to review the publishing warning.' : 'The solution was imported successfully.');
+        publishWarning || `Imported ${solutionName || 'solution'} to ${targetEnvName || targetEnvUrl}.`);
       return { ...r, ...(publishWarning ? { warning: publishWarning } : {}) };
     } catch (e) {
       stage('import', 'error', null, e.message);
-      notifyDeployment('Import stopped', 'Open the app to review the import error.');
+      notifyDeployment('Import stopped', e.message);
       return fail(e);
     }
   });

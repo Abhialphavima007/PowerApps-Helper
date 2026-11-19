@@ -5,7 +5,7 @@ function initials(name) {
   return String(name || '?').trim().split(/\s+/).slice(0, 2).map((part) => part[0]?.toUpperCase()).join('');
 }
 
-export default function AccountView({ account, accounts, envs, envLoading, envError, refreshEnvs, addAccount, cancelAccount, switchAccount, signOut, busyAuth, authError }) {
+export default function AccountView({ account, accounts, envs, envLoading, envError, refreshEnvs, addAccount, addDeviceAccount, setSignInMethod, cancelAccount, switchAccount, signOut, busyAuth, authError }) {
   const ordered = [...(accounts || [])].sort((left, right) => Number(right.active) - Number(left.active));
   const remove = (item) => {
     if (window.confirm(`Remove ${item.username} from this app? You can connect it again later.`)) signOut(item.homeAccountId);
@@ -16,6 +16,7 @@ export default function AccountView({ account, accounts, envs, envLoading, envEr
       <div><p className="h1">Accounts</p><p className="sub">Manage Microsoft work accounts and the environments available to the active account.</p></div>
       <div className="account-head-actions">
         <button className="btn" disabled={busyAuth} onClick={addAccount}>{busyAuth ? <span className="spin" /> : '+ Add account'}</button>
+        <button className="btn secondary" disabled={busyAuth} onClick={addDeviceAccount}>Use device code</button>
         {busyAuth && <button className="btn secondary" onClick={cancelAccount}>Cancel sign-in</button>}
       </div>
     </div>
@@ -28,6 +29,14 @@ export default function AccountView({ account, accounts, envs, envLoading, envEr
         <h2>{account?.name || 'No account connected'}</h2>
         <div className="muted">{account?.username || 'Add a Microsoft work account to get started.'}</div>
         {account?.tenantId && <div className="account-tenant">Tenant {account.tenantId}</div>}
+        {account && <div className="account-sign-in-method">
+          <label htmlFor="account-sign-in-method">Sign-in method</label>
+          <select id="account-sign-in-method" value={account.signInMethod || 'browser'} disabled={busyAuth} onChange={(event) => setSignInMethod(event.target.value)}>
+            <option value="browser">Browser</option>
+            <option value="deviceCode">Device code</option>
+          </select>
+          <p className="muted">Used when Microsoft requests sign-in again, including OneDrive and deployment.</p>
+        </div>}
       </div>
       <div className="account-overview-stats"><div><b>{accounts?.length || 0}</b><span>Accounts</span></div><div><b>{envs.length}</b><span>Environments</span></div></div>
     </div>
