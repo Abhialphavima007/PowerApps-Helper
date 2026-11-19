@@ -4,10 +4,16 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('api', {
   auth: {
     status: () => ipcRenderer.invoke('auth:status'),
-    add: () => ipcRenderer.invoke('auth:add'),
+    add: (options) => ipcRenderer.invoke('auth:add', options),
+    setMethod: (method) => ipcRenderer.invoke('auth:setMethod', method),
     setActive: (id) => ipcRenderer.invoke('auth:setActive', id),
     signOut: (id) => ipcRenderer.invoke('auth:signOut', id),
-    cancel: () => ipcRenderer.invoke('auth:cancel')
+    cancel: () => ipcRenderer.invoke('auth:cancel'),
+    onProgress: (cb) => {
+      const listener = (_event, data) => cb(data);
+      ipcRenderer.on('auth:progress', listener);
+      return () => ipcRenderer.removeListener('auth:progress', listener);
+    }
   },
   env: {
     list: () => ipcRenderer.invoke('env:list')
@@ -58,6 +64,13 @@ contextBridge.exposeInMainWorld('api', {
       const listener = (_e, data) => cb(data);
       ipcRenderer.on('deploy:progress', listener);
       return () => ipcRenderer.removeListener('deploy:progress', listener);
+    }
+  },
+  notifications: {
+    onDeployment: (cb) => {
+      const listener = (_event, data) => cb(data);
+      ipcRenderer.on('deployment:notification', listener);
+      return () => ipcRenderer.removeListener('deployment:notification', listener);
     }
   },
   history: {

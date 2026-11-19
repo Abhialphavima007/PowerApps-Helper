@@ -27,11 +27,14 @@ async function request(orgUrl, relPath, { method = 'GET', body, resource, raw } 
   const text = await res.text();
   if (!res.ok) {
     let msg = text;
+    let responseError;
     try {
-      msg = JSON.parse(text)?.error?.message || text;
+      responseError = JSON.parse(text)?.error;
+      msg = responseError?.message || text;
     } catch {}
     const err = new Error(`${res.status} ${res.statusText}: ${msg}`);
     err.status = res.status;
+    err.responseError = responseError;
     throw err;
   }
   if (raw) return { headers: res.headers, text };
@@ -87,10 +90,95 @@ async function addSolutionComponent(orgUrl, solutionUniqueName, componentId, com
       ComponentType: componentType,
       SolutionUniqueName: solutionUniqueName,
       AddRequiredComponents: false,
-      DoNotIncludeSubcomponents: true
+      DoNotIncludeSubcomponents: Number(componentType) === 1
     }
   });
   return { ok: true };
+}
+
+// Resolve an ID omitted from a target import error by one exact match in the source.
+// Only unambiguous component types are queried; ambiguous names are never added.
+async function findComponentBySchema(orgUrl, componentType, schemaName, { parentSchemaName = '' } = {}) {
+  const schema = String(schemaName || '').trim();
+  if (!schema) return null;
+  const escaped = schema.replace(/'/g, "''");
+  if (Number(componentType) === 1) {
+    // EntityDefinitions is a metadata endpoint and does not accept $top.
+    // A logical-name key also avoids an ambiguous filtered collection query.
+    if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(schema)) return null;
+    try {
+      const entity = await request(orgUrl, `/api/data/${API_VERSION}/EntityDefinitions(LogicalName='${schema.toLowerCase()}')`);
+      return entity.MetadataId || null;
+    } catch (error) {
+      if (error.status === 404) return null;
+      throw error;
+    }
+  }
+  if (Number(componentType) === 2) {
+    const parent = String(parentSchemaName || '').trim();
+    // Attribute logical names are only unique within a table. Never guess the
+    // parent from a display name or search every table for a matching column.
+    if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(parent) || !/^[A-Za-z][A-Za-z0-9_]*$/.test(schema)) return null;
+    const filter = encodeURIComponent(`LogicalName eq '${escaped}'`);
+    try {
+      const data = await request(orgUrl,
+        `/api/data/${API_VERSION}/EntityDefinitions(LogicalName='${parent}')/Attributes?$select=MetadataId,LogicalName&$filter=${filter}`);
+      if (data['@odata.nextLink']) return null;
+      const matches = (data.value || []).filter((item) => String(item.LogicalName || '').toLowerCase() === schema.toLowerCase());
+      const ids = [...new Set(matches.map((item) => item.MetadataId).filter(Boolean))];
+      return ids.length === 1 ? ids[0] : null;
+    } catch (error) {
+      if (error.status === 404) return null;
+      throw error;
+    }
+  }
+  if (Number(componentType) === 9) {
+    // Type 9 is a global option set. Local choices are part of their attribute
+    // and must not be guessed from the choice label.
+    if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(schema)) return null;
+    try {
+      const optionSet = await request(orgUrl,
+        `/api/data/${API_VERSION}/GlobalOptionSetDefinitions(Name='${escaped}')`);
+      return optionSet.MetadataId || null;
+    } catch (error) {
+      if (error.status === 404) return null;
+      throw error;
+    }
+  }
+  const lookups = {
+    20: [{ set: 'roles', id: 'roleid', field: 'name' }],
+    26: [{ set: 'savedqueries', id: 'savedqueryid', field: 'name' }],
+    29: [{ set: 'workflows', id: 'workflowid', field: 'uniquename' }, { set: 'workflows', id: 'workflowid', field: 'name' }],
+    60: [{ set: 'systemforms', id: 'formid', field: 'name' }],
+    61: [{ set: 'webresourceset', id: 'webresourceid', field: 'name' }],
+    62: [{ set: 'sitemaps', id: 'sitemapid', field: 'sitemapname' }],
+    80: [{ set: 'appmodules', id: 'appmoduleid', field: 'uniquename' }],
+    300: [{ set: 'canvasapps', id: 'canvasappid', field: 'name' }],
+    371: [{ set: 'connectionreferences', id: 'connectionreferenceid', field: 'connectionreferencelogicalname' }],
+    380: [{ set: 'environmentvariabledefinitions', id: 'environmentvariabledefinitionid', field: 'schemaname' }]
+  };
+  for (const lookup of lookups[Number(componentType)] || []) {
+    const filter = encodeURIComponent(`${lookup.field} eq '${escaped}'`);
+    const data = await request(orgUrl, `/api/data/${API_VERSION}/${lookup.set}?$select=${lookup.id}&$filter=${filter}`);
+    if (data['@odata.nextLink']) return null;
+    const ids = [...new Set((data.value || []).map((item) => item[lookup.id]).filter(Boolean))];
+    if (ids.length > 1) return null;
+    if (ids.length === 1) return ids[0];
+  }
+  return null;
+}
+
+async function getEntityPrimaryNameAttribute(orgUrl, entitySchemaName) {
+  const schema = String(entitySchemaName || '').trim();
+  if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(schema)) return null;
+  const logicalName = schema.toLowerCase();
+  const entity = await request(orgUrl,
+    `/api/data/${API_VERSION}/EntityDefinitions(LogicalName='${logicalName}')?$select=MetadataId,LogicalName,PrimaryNameAttribute`);
+  const returnedLogicalName = String(entity.LogicalName || '');
+  const attributeSchemaName = String(entity.PrimaryNameAttribute || '');
+  if (!entity.MetadataId || returnedLogicalName.toLowerCase() !== logicalName ||
+      !/^[A-Za-z][A-Za-z0-9_]*$/.test(attributeSchemaName)) return null;
+  return { entityId: entity.MetadataId, entitySchemaName: returnedLogicalName, attributeSchemaName };
 }
 
 // ---- Export ----
@@ -111,15 +199,35 @@ async function exportToFile(orgUrl, solutionUniqueName, managed, outFile) {
 
 // ---- Import (async with progress polling) ----
 // onProgress(percent|null, message) — percent comes from the import job (0-100).
+function diagnosticStrings(value, depth = 0) {
+  if (typeof value === 'string') return [value];
+  if (!value || typeof value !== 'object' || depth > 5) return [];
+  return Object.values(value).flatMap((item) => diagnosticStrings(item, depth + 1));
+}
+
 async function importFailure(orgUrl, importJobId, error, asyncOperationId = null) {
-  let dependencies = [];
+  const errorText = String(error?.message || error || 'Import failed');
+  const diagnostics = [errorText, ...diagnosticStrings(error?.responseError)];
+  const diagnosticMatches = diagnostics.map((message) => ({ message, dependencies: solutionZip.parseMissingDependencies(message) }));
+  const errorMatch = diagnosticMatches.find((item) => item.dependencies.length);
+  const errorDependencies = errorMatch?.dependencies || [];
   let importLog = '';
-  try {
-    const job = await request(orgUrl, `/api/data/${API_VERSION}/importjobs(${importJobId})?$select=data`);
-    importLog = typeof job.data === 'string' ? job.data : '';
-    dependencies = solutionZip.parseMissingDependencies(importLog);
-  } catch { /* Some failed imports do not create an import job. */ }
-  return { ok: false, error, importJobId, asyncOperationId, dependencies, importLog: importLog.slice(0, 12000) };
+  let logDependencies = [];
+  for (let attempt = 0; attempt < (errorDependencies.length ? 1 : 3); attempt++) {
+    try {
+      const job = await request(orgUrl, `/api/data/${API_VERSION}/importjobs(${importJobId})?$select=data`);
+      importLog = typeof job.data === 'string' ? job.data : '';
+      logDependencies = solutionZip.parseMissingDependencies(importLog);
+    } catch { /* The import job may not be visible immediately. */ }
+    if (logDependencies.length || errorDependencies.length) break;
+    if (attempt < 2) await sleep(350 * (attempt + 1));
+  }
+  // Dataverse often embeds MissingDependencies in the API error before its import job is available.
+  const dependencies = logDependencies.length ? logDependencies : errorDependencies;
+  return {
+    ok: false, error: errorText, importJobId, asyncOperationId, dependencies,
+    importLog: (importLog || errorMatch?.message || errorText).slice(0, 12000)
+  };
 }
 
 async function importSolutionFromFile(orgUrl, file, { overwrite = true, publishWorkflows = true } = {}, onProgress) {
@@ -143,11 +251,11 @@ async function importSolutionFromFile(orgUrl, file, { overwrite = true, publishW
     if (e.status === 404) {
       report(null, 'Async import unavailable; importing synchronously (this can take a while)…');
       try { await request(orgUrl, `/api/data/${API_VERSION}/ImportSolution`, { method: 'POST', body }); }
-      catch (error) { return importFailure(orgUrl, importJobId, error.message); }
+      catch (error) { return importFailure(orgUrl, importJobId, error); }
       report(100, 'Import completed.');
       return { ok: true, importJobId };
     }
-    return importFailure(orgUrl, importJobId, e.message);
+    return importFailure(orgUrl, importJobId, e);
   }
 
   if (!asyncOperationId) { report(100, 'Import submitted.'); return { ok: true, importJobId }; }
@@ -213,6 +321,8 @@ module.exports = {
   listSolutions,
   setSolutionVersion,
   addSolutionComponent,
+  findComponentBySchema,
+  getEntityPrimaryNameAttribute,
   exportSolution,
   exportToFile,
   importSolutionFromFile,

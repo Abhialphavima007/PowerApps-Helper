@@ -4,13 +4,13 @@ A cross-platform (Windows, macOS, and Linux) desktop app for deploying Microsoft
 
 [Download the latest GitHub release](https://github.com/Abhialphavima007/PowerApps-Helper/releases/latest) for Windows, macOS, or Linux.
 
-**Sign in with your Microsoft work account — no Azure app registration required for standard deployment.** The app uses a Microsoft first-party **public client** (the same one Microsoft CLIs use) with an interactive loopback sign-in, then talks to the **Dataverse Web API directly** for fast, low-lag cloud calls. Access tokens are cached **locally and encrypted**, and all deployment history stays on your machine. Agent source repair requires the MCP tenant setup described below.
+**Sign in with your Microsoft work account — no Azure app registration required for standard deployment.** The app uses a Microsoft first-party **public client** (the same one Microsoft CLIs use) with browser or device-code sign-in, then talks to the **Dataverse Web API directly** for fast, low-lag cloud calls. Access tokens are cached locally using the existing OS-backed cache when encryption is available, and all deployment history stays on your machine. Tenant consent and access policies apply to either sign-in method. Agent source repair uses the same authenticated Dataverse Web API by default; connecting to MCP is optional.
 
 ---
 
 ## What it does
 
-- **Sign in** with Microsoft credentials (MFA supported) — one click, no app registration.
+- **Sign in** with Microsoft credentials (MFA supported) — choose browser or device code. No app registration is needed when your tenant permits the default public client.
 - **Multiple accounts** — connect several work accounts, switch the active one, and the environment list follows the active account.
 - **List your environments** automatically via the Global Discovery Service.
 - Pick a **source** and **target** environment and an **unmanaged source solution**; export it as a managed or unmanaged package.
@@ -20,8 +20,8 @@ A cross-platform (Windows, macOS, and Linux) desktop app for deploying Microsoft
 - **Store the exported solution** to **OneDrive** (for Business, same account) or a **local folder**, organized as `Account / Source → Target / Solution / version.zip`. Chosen in **Settings**.
 - **Deployment notes** — the earlier change summary carries into the Review step as editable notes. You can optionally generate a structured Power Platform Pipelines-style version with a local template or **Azure AI Foundry, OpenAI, Claude, Grok, or Gemini**.
 - **Import to the target** with a **live progress bar** (real percentage from the import job), then publish for unmanaged solutions.
-- **Deploy with agent (optional)** — choose **Continue with agent** in Configure to reach deployment before exporting, or export and review first. The agent exports if needed, imports into the target, and reacts only to dependencies reported by a failed target import. It adds identifiable components to the selected unmanaged source solution, re-exports, and retries up to two repair cycles. It retains the selected environments, Azure DevOps stories, description, and notes. Each repair method and import attempt is recorded in history.
-- **Desktop notifications** — the app requests a native notification with the system sound when export or import stops, when agent deployment stops, and when deployment finishes or needs attention. The result remains visible in the app if system notifications are muted.
+- **Deploy with agent (optional)** — choose **Continue with agent** in Configure to reach deployment before exporting, or export and review first. The agent exports if needed, imports into the target, and reacts only to dependencies reported by a failed target import. It captures the import error and import-job log at failure time, adds identifiable components to the selected unmanaged source solution, publishes source customizations once per repair cycle, re-exports, and retries up to five repair cycles. It retains the selected environments, Azure DevOps stories, description, and notes. Each repair method and import attempt is recorded in history.
+- **Deployment notifications** — the app requests a native notification with the system sound when export or import stops, when agent deployment stops, and when deployment finishes or needs attention. A dismissible in-app alert also appears if native notifications are unsupported or disabled.
 - **Track history** — filter by day, week, month, route, status, or solution; export filtered records as CSV/JSON or delete history records.
 - **Git (optional)** — commit the exported `.zip` + notes to a local repo.
 
@@ -34,19 +34,21 @@ Open the **Settings** tab to choose where exported solutions land:
 - **AI credentials** — save API keys for OpenAI, Claude, Grok, Gemini, and Azure AI Foundry in the encrypted local credential store. Saved keys remain masked; revealing one requires Windows Hello and it hides again after 30 seconds. Azure AI Foundry also needs a model inference endpoint and model or deployment name. A Codex or ChatGPT sign-in does not supply an OpenAI API key.
 - **Azure DevOps** — enter the organization URL and a Personal Access Token with **Work Items: Read** scope. Preview one or more comma-separated stories in Settings. In a deployment, enter comma-separated IDs, `AB#` references, or work item URLs; the app fetches each item, its full child tree, related items, descriptions, acceptance criteria, status dates, and comments with progress shown for large trees. The AI summary button processes large sets in parts and writes a plain-English problem, task journey, and outcome for each story. Review it in the full-screen view or edit the change description before deployment. Work item details are sent to the chosen AI provider only when requesting AI output.
 
-The manual import path remains available. Package dependency declarations are advisory and never trigger agent source repairs. The agent only makes a repair after a failed target import supplies a specific component GUID and type. It stops on missing or ambiguous diagnostics, repeated failures, inaccessible source solutions, or unsupported component types. If export itself fails, there is no package to import, so the agent stops and reports that export error.
+The manual import path remains available. Package dependency declarations are advisory and never trigger agent source repairs. The agent only makes a repair after a failed target import identifies a missing component. If the target error omits its GUID, the agent uses one exact type-and-schema match from the package or source environment. A missing table already exported as a shell can be added; before another import, the agent checks that the re-export contains the table beyond a shell. It stops on missing or ambiguous diagnostics, repeated failures, inaccessible source solutions, or unsupported component types. If export itself fails, there is no package to import, so the agent stops and reports that export error.
 
 ### Agent deployment and Microsoft Dataverse MCP
 
-The app connects directly to the **environment-hosted Microsoft Dataverse MCP endpoint** at https://{environment}.crm.dynamics.com/api/mcp. On first use, it may open a Microsoft sign-in for the active account using the Microsoft Dataverse MCP client. Your administrators must grant tenant consent for client ID 0c412cc3-0dd6-449b-987f-05b053db9457, enable Dataverse MCP in the source environment, and add that client to its MCP allowed list. See [Microsoft's MCP setup](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/data-platform-mcp) and [client setup](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/data-platform-mcp-other-clients).
+Agent dependency repair uses the active account's **Dataverse Web API** token by default. This avoids requesting a separate MCP permission or triggering its admin-approval prompt. Tenant policies may still require approval for Dataverse access.
 
-The endpoint's invoke_api tool is used for AddSolutionComponent only when its advertised schema supports the action. When the endpoint exposes no compatible tool, the agent uses the app's existing authenticated Dataverse Web API for that addition and labels it **Dataverse Web API fallback** in progress and history. It does not silently change methods after an ambiguous MCP error. Tenant policies, permissions, and live MCP tool availability vary; a local build cannot verify them.
+To opt into the environment-hosted MCP endpoint at https://{environment}.crm.dynamics.com/api/mcp, set `DATAVERSE_MCP_ENABLED=true`. [Microsoft's direct endpoint setup](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/data-platform-mcp-other-clients#connect-using-the-remote-endpoint) requires a custom Entra app with the Dynamics CRM `mcp.tools` permission. Set `DATAVERSE_MCP_CLIENT_ID` to that tenant-approved public client's ID, enable public-client authentication for device code (and a loopback redirect for browser sign-in), and enable its entry in the source environment's MCP allowed clients. Tenant consent and access policies still apply. The compatibility default is Dataverse CLI client ID `0c412cc3-0dd6-449b-987f-05b053db9457`, documented for the `@microsoft/dataverse` local proxy; Microsoft explicitly requires tenant administrator consent for that client. See [Microsoft's MCP environment setup](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/data-platform-mcp).
+
+When MCP is enabled, the endpoint's invoke_api tool is used for AddSolutionComponent only when its advertised schema supports the action. If MCP cannot connect before any source change, the agent falls back to the authenticated Dataverse Web API. It does not switch methods after an MCP source action begins, because the outcome might be ambiguous. Tenant policies, permissions, and live MCP tool availability vary; a local build cannot verify them.
 
 ---
 
 ## Why no app registration / low lag
 
-- **No app registration for standard deployment:** sign-in uses a Microsoft first-party *public* client ID with no secret. Agent source repair requires tenant consent and source environment MCP setup.
+- **No app registration for standard deployment:** sign-in uses a Microsoft first-party *public* client ID with no secret. MCP is optional and requires tenant consent and source environment setup.
 - **Low lag:** browsing, export and import go straight to the **Dataverse Web API** over HTTPS with a cached bearer token — there is no `pac` subprocess in the hot path. After the first sign-in, tokens refresh silently.
 - **Local where it matters:** the encrypted token cache, exported solution artifacts, deployment notes and history all live in your OS app-data folder.
 
@@ -89,7 +91,7 @@ cp .env.example .env      # add your AI key(s); Microsoft sign-in needs no confi
 
 ---
 
-For agent deployments, DATAVERSE_MCP_CLIENT_ID optionally overrides the default Microsoft Dataverse MCP public client ID. The selected client must be approved by your tenant and allowed by the source environment.
+For agent deployments, set `DATAVERSE_MCP_ENABLED=true` to use MCP. `DATAVERSE_MCP_CLIENT_ID` selects its public client, which must be approved by your tenant and allowed by the source environment. Leave MCP disabled to use the existing Dataverse Web API access for source repair.
 
 ## Run (development)
 
@@ -97,7 +99,11 @@ For agent deployments, DATAVERSE_MCP_CLIENT_ID optionally overrides the default 
 npm run dev
 ```
 
-Starts Vite and launches Electron. Click **Sign in with Microsoft**, complete the browser sign-in, and your environments load automatically.
+Starts Vite and launches Electron. Click **Sign in with Microsoft** for browser sign-in, or **Sign in with device code**. For device code, copy the code shown in the app, click **Open Microsoft sign-in**, enter the code, and complete authentication. Your environments load automatically after sign-in.
+
+In **Accounts**, **Use device code** connects an account with that method. For an already connected account, set **Sign-in method → Device code** in the active account card. The app remembers the method per account and uses it when Dataverse, OneDrive, or an enabled deployment MCP connection next requires sign-in. Cached tokens continue to refresh silently. Sign-in prompts can be cancelled and time out after five minutes.
+
+If Microsoft shows **Request sent** or **Need admin approval**, an administrator must approve the client application. Changing to device code cannot bypass that requirement. The installed laptop Dataverse MCP server and this app's environment-hosted MCP connection may use different app registrations; a successful sign-in to one does not establish consent for the other. See [device-code implementation notes](docs/device-code-login.md) for build evidence and remaining checks.
 
 ## Build a distributable
 
@@ -145,7 +151,7 @@ electron/
   main.js              Electron main process + IPC orchestration
   preload.js           Secure bridge (contextIsolation)
   services/
-    auth.js            Microsoft sign-in — multi-account, cancellable loopback, token cache
+    auth.js            Microsoft sign-in — multi-account, browser/device code, token cache
     dataverse.js       Dataverse Web API: discovery, export, async import (w/ progress), publish
     dataverseMcp.js    Direct connection to Microsoft's environment MCP endpoint
     deploymentAgent.js Bounded import, dependency repair, re-export, and retry workflow
@@ -170,7 +176,7 @@ index.html, vite.config.js, package.json
 
 ## Notes & limits
 
-- First sign-in opens your browser; afterward tokens refresh silently.
+- First sign-in uses your chosen browser or device-code method; afterward tokens refresh silently.
 - Very large solution imports run asynchronously with polling (15-min ceiling).
 - Managed vs unmanaged export is your choice per deployment.
-- MFA and conditional access are handled by the interactive browser sign-in.
+- Microsoft handles MFA and conditional access for either method. Some tenants block device-code authentication.

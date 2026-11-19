@@ -11,10 +11,11 @@ const STEPS = [
 
 const STAGE_LABELS = {
   version: 'Set version', export: 'Export from source', analyze: 'Analyze package',
-  store: 'Store artifact', agent: 'Deployment agent', import: 'Import to target',
-  repair: 'Add source dependencies', reexport: 'Re-export source', publish: 'Publish customizations'
+  store: 'Store artifact', agent: 'Deployment agent', import: 'Import to target', resolve: 'Find source components',
+  repair: 'Add source dependencies', publishsource: 'Publish source customizations',
+  reexport: 'Re-export source', publish: 'Publish target customizations'
 };
-const STAGE_ORDER = ['version', 'export', 'analyze', 'store', 'agent', 'import', 'repair', 'reexport', 'publish'];
+const STAGE_ORDER = ['version', 'export', 'analyze', 'store', 'agent', 'import', 'resolve', 'repair', 'publishsource', 'reexport', 'publish'];
 
 function bumpVersion(v) {
   if (!v) return '1.0.0.1';
@@ -290,6 +291,8 @@ export default function DeployView({ account, envs, envLoading, envError, refres
     try {
       const r = await api.deploy.importSolution({
         targetEnvUrl: targetUrl, artifact: analysis.artifact,
+        targetEnvName: envName(envs, targetUrl),
+        solutionName: mode === 'file' ? (analysis?.inspection?.uniqueName || filePath.split(/[\\/]/).pop()) : (selectedSolution?.friendlyName || solutionName),
         overwrite: forceOverwrite, publishChanges, exportManaged: managed
       });
       setImportResult(r);
@@ -350,10 +353,21 @@ export default function DeployView({ account, envs, envLoading, envError, refres
   };
 
   const reset = () => {
+    // A new deployment starts with a clean configuration as well as a clean result.
+    ++solutionRequest.current;
+    ++workRequest.current;
+    clearTimeout(workTimer.current);
+    workTimer.current = null;
+    setMode('source');
     setStep('config'); setAnalysis(null); setNotes(null); setNotesWarning('');
     setImportResult(null); setRecord(null); setError(''); setProgress({}); setFilePath('');
-    setDescription(''); setWorkItems(''); setWorkItemDetails(null); setWorkSummary('');
-    setSummaryExpanded(false);
+    setSourceUrl(''); setTargetUrl(''); setSolutions([]); setSolLoading(false);
+    setSolutionName(''); setVersion(''); setDeployType('managed');
+    setPublishChanges(true); setForceOverwrite(true); setGitCommit(false);
+    setDescription(''); setWorkItems(''); setWorkItemDetails(null); setWorkItemError('');
+    setWorkItemLoading(false); setWorkItemProgress(null); setWorkSummary('');
+    setSummaryExpanded(false); setSummaryBusy(false); setSummaryProgress(null);
+    setBusy(false); setGenBusy(false);
   };
 
   const stepIndex = STEPS.findIndex((s) => s.key === step);
@@ -562,14 +576,14 @@ export default function DeployView({ account, envs, envLoading, envError, refres
               {analysis && <button className="btn" disabled={busy} onClick={runDeploy}>{busy ? <span className="spin" /> : `🚀 Import ${managed ? 'managed' : 'unmanaged'} to target`}</button>}
             </div>
           )}
-          {mode === 'source' && !importResult && <p className="muted agent-help">The agent imports, reads failed target-import dependencies, adds identifiable components to the source solution through Microsoft Dataverse MCP when supported (or the authenticated Dataverse API fallback), then re-exports and retries up to twice. Package dependency warnings alone do not trigger repairs. Your route, work items, description and notes stay selected.</p>}
+          {mode === 'source' && !importResult && <p className="muted agent-help">The agent imports, reads failed target-import dependencies, adds identifiable components to the source solution through Microsoft Dataverse MCP when supported (or the authenticated Dataverse API fallback), publishes the source customizations once, then re-exports and retries up to twice. Package dependency warnings alone do not trigger repairs. Your route, work items, description and notes stay selected.</p>}
           {(busy || activeStages.length > 0) && <ProgressPanel stages={activeStages} progress={progress} />}
           {importResult && (
             <div className={'alert ' + (importResult.ok ? 'info' : 'err')} style={{ marginTop: 14 }}>
               {importResult.ok ? (record ? '✔ Import completed and recorded in history.' : '✔ Import completed; history could not be saved.') : (importResult.agent ? '✖ Agent stopped: ' : '✖ Import failed: ') + (importResult.error || '')}
               {importResult.warning && <p>{importResult.warning}</p>}
               {importResult.attempts?.length > 0 && <p>Import attempts: {importResult.attempts.length}. Source components added: {importResult.repairs?.length || 0}.</p>}
-              {importResult.dependencies?.length > 0 && <p>Failed-import dependencies: {importResult.dependencies.map((item) => item.requiredSchema || item.requiredId || item.requiredType).join(', ')}</p>}
+              {importResult.dependencies?.length > 0 && <p>Failed-import dependencies: {importResult.dependencies.map((item) => `${item.requiredSchema || item.requiredId || item.requiredType} (type ${item.requiredTypeCode || '?'}${item.requiredId ? ', ID ' + item.requiredId : ', no ID'})`).join(', ')}</p>}
               {importResult.importLog && <details><summary>View Dataverse import log</summary><pre className="log">{importResult.importLog}</pre></details>}
               <div className="right">
                 {record?.notesFile && <button className="btn small secondary" onClick={() => api.util.revealPath(record.notesFile)}>Open notes file</button>}

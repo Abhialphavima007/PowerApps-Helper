@@ -166,7 +166,7 @@ function Detail({ d, onClose }) {
         {d.agent.repairs?.length > 0 && <table style={{ marginBottom: 14 }}><thead><tr><th>Component</th><th>Method</th><th>Cycle</th></tr></thead><tbody>
           {d.agent.repairs.map((repair, index) => <tr key={index}><td>{repair.label}</td><td>{repair.method}</td><td>{repair.cycle}</td></tr>)}
         </tbody></table>}
-        {d.agent.failedDependencies?.length > 0 && <p className="muted">Unresolved: {d.agent.failedDependencies.map((item) => item.requiredSchema || item.requiredId || item.requiredType).join(', ')}</p>}
+        {d.agent.failedDependencies?.length > 0 && <p className="muted">Reported by target import: {d.agent.failedDependencies.map((item) => `${item.requiredSchema || item.requiredId || item.requiredType} (type ${item.requiredTypeCode || '?'}${item.requiredId ? ', ID ' + item.requiredId : ', no ID'})`).join(', ')}</p>}
         {d.agent.importLog && <details style={{ marginBottom: 14 }}><summary>View Dataverse import log</summary><pre className="log">{d.agent.importLog}</pre></details>}
       </>}
 

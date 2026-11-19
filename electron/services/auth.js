@@ -8,18 +8,22 @@
 // The Azure CLI client is NOT preauthorized for Graph (AADSTS65002), so OneDrive
 // uses the Graph CLI client, which is designed to call Graph.
 //
-// Manual, cancellable loopback auth-code + PKCE flow lets us time out / cancel a
-// sign-in so the login button always works again on retry.
+// Cancellable browser (loopback + PKCE) and device-code sign-in share the same
+// clients and token caches. Tenant consent applies to both methods.
 
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const { randomUUID } = require('crypto');
 const { shell, safeStorage } = require('electron');
 const { PublicClientApplication, CryptoProvider } = require('@azure/msal-node');
 
 const DV_CLIENT_ID = process.env.AZURE_CLIENT_ID || '04b07795-8ddb-461a-bbee-02f9e1bf7b46'; // Azure CLI
 const GRAPH_CLIENT_ID = process.env.AZURE_GRAPH_CLIENT_ID || '14d82eec-204b-4c2f-b7e8-296a70dab67e'; // Graph CLI
-const MCP_CLIENT_ID = process.env.DATAVERSE_MCP_CLIENT_ID || '0c412cc3-0dd6-449b-987f-05b053db9457'; // Microsoft Dataverse MCP CLI client
+// Compatibility default: the documented Dataverse CLI/local-proxy client requires
+// tenant admin consent. Microsoft's direct /api/mcp setup uses a custom public
+// client with Dynamics CRM mcp.tools permission; configure its approved ID here.
+const MCP_CLIENT_ID = process.env.DATAVERSE_MCP_CLIENT_ID || '0c412cc3-0dd6-449b-987f-05b053db9457';
 const AUTHORITY = process.env.AZURE_AUTHORITY || 'https://login.microsoftonline.com/common';
 
 const GLOBAL_DISCO = 'https://globaldisco.crm.dynamics.com';
@@ -34,7 +38,10 @@ let graphCacheFile;
 let mcpCacheFile;
 let activeFile;
 let activeHomeAccountId = null;
+let signInMethods = {};
+let reportProgress = () => {};
 let inflight = null;
+const SIGN_IN_TIMEOUT_MS = 5 * 60 * 1000;
 
 // ---------- encrypted cache helpers ----------
 function encrypt(str) {
@@ -61,14 +68,20 @@ function cachePlugin(file) {
   };
 }
 
-function init(userDataPath) {
+function init(userDataPath, onProgress = () => {}) {
   const dir = path.join(userDataPath, 'powerapps-helper');
+  fs.mkdirSync(dir, { recursive: true });
   dvCacheFile = path.join(dir, 'msal-cache.bin');
   graphCacheFile = path.join(dir, 'graph-cache.bin');
   mcpCacheFile = path.join(dir, 'mcp-cache.bin');
   activeFile = path.join(dir, 'active-account.json');
+  reportProgress = onProgress;
   try {
-    if (fs.existsSync(activeFile)) activeHomeAccountId = JSON.parse(fs.readFileSync(activeFile, 'utf8')).homeAccountId || null;
+    if (fs.existsSync(activeFile)) {
+      const saved = JSON.parse(fs.readFileSync(activeFile, 'utf8'));
+      activeHomeAccountId = saved.homeAccountId || null;
+      signInMethods = Object.fromEntries(Object.entries(saved.signInMethods || {}).filter(([, method]) => method === 'browser' || method === 'deviceCode'));
+    }
   } catch {}
   dvPca = new PublicClientApplication({ auth: { clientId: DV_CLIENT_ID, authority: AUTHORITY }, cache: { cachePlugin: cachePlugin(dvCacheFile) } });
   graphPca = new PublicClientApplication({ auth: { clientId: GRAPH_CLIENT_ID, authority: AUTHORITY }, cache: { cachePlugin: cachePlugin(graphCacheFile) } });
@@ -77,7 +90,29 @@ function init(userDataPath) {
 }
 
 function persistActive() {
-  try { fs.writeFileSync(activeFile, JSON.stringify({ homeAccountId: activeHomeAccountId })); } catch {}
+  try { fs.writeFileSync(activeFile, JSON.stringify({ homeAccountId: activeHomeAccountId, signInMethods })); } catch {}
+}
+function validateMethod(method) {
+  if (method !== 'browser' && method !== 'deviceCode') throw new Error('Choose browser or device-code sign-in.');
+  return method;
+}
+function activeSignInMethod() { return signInMethods[activeHomeAccountId] || 'browser'; }
+function progress(controller, details) {
+  if (inflight !== controller) return;
+  try { reportProgress({ requestId: controller.requestId, method: controller.method, ...details }); } catch { /* The sign-in timeout still releases the flow if the window closes. */ }
+}
+function signInError(error) {
+  const code = error?.errorCode;
+  if (code === 'device_code_expired' || code === 'expired_token' || code === 'user_timeout_reached') {
+    return new Error('Sign-in code expired or timed out. Please try again for a new code.');
+  }
+  if (code === 'authorization_declined' || code === 'access_denied') {
+    return new Error('Microsoft sign-in was declined or blocked by your organization. Device code does not bypass tenant consent or access policies.');
+  }
+  if (code === 'consent_required' || /AADSTS65001|AADSTS90094|AADSTS90093/i.test(error?.message || '')) {
+    return new Error('Your organization requires administrator approval for this Microsoft application. Device-code sign-in requires the same approval.');
+  }
+  return error;
 }
 function scopeFor(resourceUrl) {
   return [resourceUrl.replace(/\/+$/, '') + '/.default'];
@@ -91,7 +126,9 @@ const FAIL_HTML = (m) =>
 function cancelSignIn() {
   if (inflight) {
     const c = inflight;
+    progress(c, { stage: 'finished' });
     inflight = null;
+    if (c.deviceRequest) c.deviceRequest.cancel = true;
     try { if (c.timeout) clearTimeout(c.timeout); } catch {}
     try { if (c.server) c.server.close(); } catch {}
     c.reject(new Error('Sign-in cancelled.'));
@@ -103,11 +140,12 @@ function cancelSignIn() {
 async function interactiveLogin(pca, scopes, loginHint) {
   cancelSignIn();
   const server = http.createServer();
-  const controller = { server };
+  const controller = { server, requestId: randomUUID(), method: 'browser' };
   const cancelled = new Promise((_, reject) => { controller.reject = reject; });
   inflight = controller;
+  progress(controller, { stage: 'started', loginHint });
   try {
-    controller.timeout = setTimeout(() => controller.reject(new Error('Sign-in timed out. Please try again.')), 5 * 60 * 1000);
+    controller.timeout = setTimeout(() => controller.reject(new Error('Sign-in timed out. Please try again.')), SIGN_IN_TIMEOUT_MS);
     const { verifier, challenge } = await Promise.race([cryptoProvider.generatePkceCodes(), cancelled]);
     await Promise.race([new Promise((res, rej) => {
       server.once('error', rej);
@@ -148,16 +186,82 @@ async function interactiveLogin(pca, scopes, loginHint) {
       shell.openExternal(authUrl).catch(reject);
     }), cancelled]);
     return result;
+  } catch (error) {
+    throw signInError(error);
   } finally {
     try { if (controller.timeout) clearTimeout(controller.timeout); } catch {}
     try { server.close(); } catch {}
-    if (inflight === controller) inflight = null;
+    if (inflight === controller) {
+      progress(controller, { stage: 'finished' });
+      inflight = null;
+    }
   }
+}
+
+async function deviceCodeLogin(pca, scopes, loginHint) {
+  cancelSignIn();
+  const controller = { requestId: randomUUID(), method: 'deviceCode' };
+  const cancelled = new Promise((_, reject) => { controller.reject = reject; });
+  const deadline = Date.now() + SIGN_IN_TIMEOUT_MS;
+  controller.deviceRequest = {
+    scopes,
+    timeout: SIGN_IN_TIMEOUT_MS / 1000,
+    cancel: false,
+    deviceCodeCallback: (response) => {
+      if (inflight !== controller) { controller.deviceRequest.cancel = true; return; }
+      if (!response.userCode || !Number.isFinite(response.expiresIn) || response.expiresIn <= 0) {
+        throw new Error('Microsoft did not return a valid sign-in code. Please try again.');
+      }
+      const uri = new URL(response.verificationUri);
+      if (uri.protocol !== 'https:' || uri.username || uri.password ||
+          !['microsoft.com', 'www.microsoft.com', 'login.microsoft.com', 'login.microsoftonline.com'].includes(uri.hostname)) {
+        throw new Error('Microsoft returned an unsupported device-code verification address.');
+      }
+      // Send only the user-facing code. The device credential and tokens stay in main.
+      progress(controller, {
+        stage: 'code', userCode: response.userCode, verificationUri: uri.href,
+        expiresAt: Math.min(deadline, Date.now() + response.expiresIn * 1000), loginHint
+      });
+    }
+  };
+  inflight = controller;
+  progress(controller, { stage: 'started', loginHint });
+  controller.timeout = setTimeout(() => {
+    controller.deviceRequest.cancel = true;
+    controller.reject(new Error('Sign-in timed out. Please try again for a new code.'));
+  }, SIGN_IN_TIMEOUT_MS);
+  try {
+    const knownAccounts = new Set((await Promise.race([pca.getTokenCache().getAllAccounts(), cancelled])).map((account) => account.homeAccountId));
+    if (inflight !== controller || controller.deviceRequest.cancel) throw new Error('Sign-in cancelled.');
+    const result = await Promise.race([pca.acquireTokenByDeviceCode(controller.deviceRequest), cancelled]);
+    if (inflight !== controller || controller.deviceRequest.cancel) throw new Error('Sign-in cancelled.');
+    if (!result?.account || !result.accessToken) throw new Error('Microsoft did not complete sign-in. Please try again.');
+    if (loginHint && result.account.username?.toLowerCase() !== loginHint.toLowerCase()) {
+      if (!knownAccounts.has(result.account.homeAccountId)) await pca.getTokenCache().removeAccount(result.account);
+      throw new Error('Sign-in used a different account. Retry with ' + loginHint + '.');
+    }
+    return result;
+  } catch (error) {
+    throw signInError(error);
+  } finally {
+    controller.deviceRequest.cancel = true;
+    clearTimeout(controller.timeout);
+    if (inflight === controller) {
+      progress(controller, { stage: 'finished' });
+      inflight = null;
+    }
+  }
+}
+
+function login(pca, scopes, loginHint, method = activeSignInMethod()) {
+  return validateMethod(method) === 'deviceCode'
+    ? deviceCodeLogin(pca, scopes, loginHint)
+    : interactiveLogin(pca, scopes, loginHint);
 }
 
 // ---------- accounts (Dataverse client is the source of truth) ----------
 function mapAcct(a) {
-  return { username: a.username, name: a.name || a.username, tenantId: a.tenantId, homeAccountId: a.homeAccountId, active: a.homeAccountId === activeHomeAccountId };
+  return { username: a.username, name: a.name || a.username, tenantId: a.tenantId, homeAccountId: a.homeAccountId, active: a.homeAccountId === activeHomeAccountId, signInMethod: signInMethods[a.homeAccountId] || 'browser' };
 }
 async function allAccounts() {
   return dvPca.getTokenCache().getAllAccounts();
@@ -172,11 +276,22 @@ async function getActiveAccount() {
   if (activeHomeAccountId !== acc.homeAccountId) { activeHomeAccountId = acc.homeAccountId; persistActive(); }
   return acc;
 }
-async function addAccount() {
-  const r = await interactiveLogin(dvPca, scopeFor(GLOBAL_DISCO));
+async function addAccount({ method = 'browser' } = {}) {
+  validateMethod(method);
+  const r = await login(dvPca, scopeFor(GLOBAL_DISCO), undefined, method);
   activeHomeAccountId = r.account.homeAccountId;
+  signInMethods[activeHomeAccountId] = method;
   persistActive();
   return mapAcct(r.account);
+}
+async function setSignInMethod(method) {
+  validateMethod(method);
+  if (inflight) throw new Error('Finish or cancel sign-in before changing its method.');
+  const account = await getActiveAccount();
+  if (!account) throw new Error('Connect an account before changing its sign-in method.');
+  signInMethods[account.homeAccountId] = method;
+  persistActive();
+  return { ok: true, account: mapAcct(account) };
 }
 async function setActive(homeAccountId) {
   activeHomeAccountId = homeAccountId;
@@ -186,6 +301,7 @@ async function setActive(homeAccountId) {
 }
 async function signOut(homeAccountId) {
   const removed = (await allAccounts()).filter((a) => !homeAccountId || a.homeAccountId === homeAccountId);
+  for (const account of removed) delete signInMethods[account.homeAccountId];
   const cache = dvPca.getTokenCache();
   const accts = await cache.getAllAccounts();
   for (const a of accts) if (!homeAccountId || a.homeAccountId === homeAccountId) await cache.removeAccount(a);
@@ -210,6 +326,7 @@ async function signOut(homeAccountId) {
     } catch {}
     try { if (fs.existsSync(mcpCacheFile)) fs.unlinkSync(mcpCacheFile); } catch {}
   }
+  persistActive();
   return { ok: true };
 }
 async function status() {
@@ -225,7 +342,7 @@ async function getToken(resourceUrl) {
   if (account) {
     try { return (await dvPca.acquireTokenSilent({ account, scopes })).accessToken; } catch {}
   }
-  const r = await interactiveLogin(dvPca, scopes, account ? account.username : undefined);
+  const r = await login(dvPca, scopes, account ? account.username : undefined);
   activeHomeAccountId = r.account.homeAccountId;
   persistActive();
   return r.accessToken;
@@ -241,7 +358,7 @@ async function getMcpToken(resourceUrl) {
   for (const account of matches) {
     try { return (await mcpPca.acquireTokenSilent({ account, scopes })).accessToken; } catch {}
   }
-  const result = await interactiveLogin(mcpPca, scopes, active.username);
+  const result = await login(mcpPca, scopes, active.username);
   if (result.account?.username?.toLowerCase() !== active.username?.toLowerCase()) {
     throw new Error('The Dataverse MCP sign-in used a different account. Retry with the active PowerApps Helper account.');
   }
@@ -265,7 +382,7 @@ async function getGraphToken(scopes) {
     try { return (await graphPca.acquireTokenSilent({ account: acc, scopes })).accessToken; } catch {}
   }
   const active = await getActiveAccount();
-  const r = await interactiveLogin(graphPca, scopes, active ? active.username : undefined);
+  const r = await login(graphPca, scopes, active ? active.username : undefined);
   return r.accessToken;
 }
 
@@ -275,6 +392,7 @@ module.exports = {
   addAccount,
   listAccounts,
   setActive,
+  setSignInMethod,
   signOut,
   status,
   getToken,
