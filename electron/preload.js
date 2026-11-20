@@ -24,6 +24,8 @@ contextBridge.exposeInMainWorld('api', {
   settings: {
     get: () => ipcRenderer.invoke('settings:get'),
     save: (patch) => ipcRenderer.invoke('settings:save', patch),
+    getClientName: () => ipcRenderer.invoke('settings:clientName:get'),
+    saveClientName: (value, account) => ipcRenderer.invoke('settings:clientName:save', value, account),
     chooseFolder: () => ipcRenderer.invoke('settings:chooseFolder')
   },
   credentials: {

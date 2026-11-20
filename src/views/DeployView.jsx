@@ -306,7 +306,7 @@ export default function DeployView({ account, envs, envLoading, envError, refres
         description, workItems, workItemDetails, workItemSummary: workSummary, exportManaged: managed, mode,
         artifact: analysis.artifact, stored: analysis.stored || {},
         dependencies: analysis.inspection?.dependencies || [], summary: analysis.inspection?.summary || {},
-        notes: effectiveNotes, status: r.ok ? 'success' : 'failed', warning: r.warning || null, error: r.ok ? null : r.error
+        notes: effectiveNotes, status: r.ok ? 'success' : 'failed', warning: [r.warning, analysis.stored?.warning].filter(Boolean).join(' ') || null, error: r.ok ? null : r.error
       });
       setRecord(rec);
       if (gitCommit) {
@@ -581,7 +581,7 @@ export default function DeployView({ account, envs, envLoading, envError, refres
           {importResult && (
             <div className={'alert ' + (importResult.ok ? 'info' : 'err')} style={{ marginTop: 14 }}>
               {importResult.ok ? (record ? '✔ Import completed and recorded in history.' : '✔ Import completed; history could not be saved.') : (importResult.agent ? '✖ Agent stopped: ' : '✖ Import failed: ') + (importResult.error || '')}
-              {importResult.warning && <p>{importResult.warning}</p>}
+              {(record?.warning || importResult.warning) && <p>{record?.warning || importResult.warning}</p>}
               {importResult.attempts?.length > 0 && <p>Import attempts: {importResult.attempts.length}. Source components added: {importResult.repairs?.length || 0}.</p>}
               {importResult.dependencies?.length > 0 && <p>Failed-import dependencies: {importResult.dependencies.map((item) => `${item.requiredSchema || item.requiredId || item.requiredType} (type ${item.requiredTypeCode || '?'}${item.requiredId ? ', ID ' + item.requiredId : ', no ID'})`).join(', ')}</p>}
               {importResult.importLog && <details><summary>View Dataverse import log</summary><pre className="log">{importResult.importLog}</pre></details>}
@@ -651,6 +651,7 @@ function AnalyzeStep({ analysis, managed, onReveal }) {
           <div className="k">Stored</div>
           <div className="muted">{stored.storage === 'onedrive' ? 'OneDrive' : stored.storedPath ? 'Local: ' + stored.storedPath : '—'}</div>
         </div>
+        {stored.warning && <div className="alert warn" style={{ marginTop: 12 }}>{stored.warning}</div>}
       </div>
 
       <div className="card">

@@ -1,12 +1,38 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import { api, hasApi } from './api.js';
 import AccountView from './views/AccountView.jsx';
 import DeployView from './views/DeployView.jsx';
 import HistoryView from './views/HistoryView.jsx';
 import SettingsView from './views/SettingsView.jsx';
 import SignInPrompt from './components/SignInPrompt.jsx';
+import { applyTheme, normalizeTheme } from './theme.mjs';
 
-export default function App() {
+export default function App({ initialTheme = 'dark' }) {
+  const [theme, setTheme] = useState(() => normalizeTheme(initialTheme));
+  const [themeSaving, setThemeSaving] = useState(false);
+  const [themeError, setThemeError] = useState('');
+  const themeSavePending = useRef(false);
+  useLayoutEffect(() => applyTheme(theme), [theme]);
+
+  const changeTheme = async (nextTheme) => {
+    if (themeSavePending.current || nextTheme === theme) return;
+    if (!['light', 'dark'].includes(nextTheme)) return;
+    const previousTheme = theme;
+    themeSavePending.current = true;
+    setThemeSaving(true);
+    setThemeError('');
+    setTheme(nextTheme);
+    try {
+      const saved = await api.settings.save({ theme: nextTheme });
+      if (saved?.theme !== nextTheme) throw new Error('Theme preference was not saved.');
+    } catch {
+      setTheme(previousTheme);
+      setThemeError('Could not save the appearance setting. Please try again.');
+    } finally {
+      themeSavePending.current = false;
+      setThemeSaving(false);
+    }
+  };
   const [tab, setTab] = useState('deploy');
   const [account, setAccount] = useState(null);
   const [accounts, setAccounts] = useState([]);
@@ -135,33 +161,43 @@ export default function App() {
   return (
     <div className="app">
       <aside className="sidebar">
-        <div className="brand">Power<span>Apps</span> Helper</div>
-        <nav className="nav">
-          <button className={tab === 'deploy' ? 'active' : ''} onClick={() => setTab('deploy')}>🚀 Deploy</button>
-          <button className={tab === 'history' ? 'active' : ''} onClick={() => setTab('history')}>🕓 History</button>
-          <button className={tab === 'account' ? 'active' : ''} onClick={() => setTab('account')}>👤 Accounts</button>
-          <button className={tab === 'settings' ? 'active' : ''} onClick={() => setTab('settings')}>⚙️ Settings</button>
+        <div className="brand"><span className="sidebar-icon brand-icon" aria-hidden="true">P</span><span className="sidebar-label">Power<span>Apps</span> Helper</span></div>
+        <nav className="nav" aria-label="Main navigation">
+          {[
+            ['deploy', '🚀', 'Deploy'], ['history', '🕓', 'History'],
+            ['account', '👤', 'Accounts'], ['settings', '⚙️', 'Settings']
+          ].map(([id, icon, label]) => <button key={id} className={tab === id ? 'active' : ''} aria-label={label} aria-current={tab === id ? 'page' : undefined} title={label} onClick={() => setTab(id)}><span className="sidebar-icon" aria-hidden="true">{icon}</span><span className="sidebar-label">{label}</span></button>)}
         </nav>
         <div className="spacer" />
+        <div className="sidebar-appearance">
+          <button type="button" className="sidebar-auth-button" disabled={themeSaving}
+            aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+            title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+            onClick={() => changeTheme(theme === 'dark' ? 'light' : 'dark')}>
+            <span className="sidebar-icon" aria-hidden="true">{theme === 'dark' ? '☀' : '☾'}</span>
+            <span className="sidebar-label">{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
+          </button>
+        </div>
         {signedIn ? (
           <div className="acct-box" title={account.username}>
-            <div className="acct-dot ok" />
-            <div className="acct-meta">
+            <div className="sidebar-icon"><div className="acct-dot ok" /></div>
+            <div className="acct-meta sidebar-label">
               <div className="acct-name">{account.name || account.username}</div>
               <div className="acct-mail">{account.username}</div>
             </div>
           </div>
         ) : (
-          <div className="acct-box">
-            <button className="btn small" style={{ width: '100%' }} disabled={busyAuth} onClick={addAccount}>
-              {busyAuth ? <span className="spin" /> : 'Sign in'}
+          <div className="sidebar-auth">
+            <button className="sidebar-auth-button" aria-label={busyAuth ? 'Signing in' : 'Sign in'} title={busyAuth ? 'Signing in' : 'Sign in'} disabled={busyAuth} onClick={addAccount}>
+              <span className="sidebar-icon" aria-hidden="true">{busyAuth ? <span className="spin" /> : '🔐'}</span><span className="sidebar-label">{busyAuth ? 'Signing in…' : 'Sign in'}</span>
             </button>
-            {busyAuth && <button className="btn small secondary" style={{ width: '100%', marginTop: 6 }} onClick={cancelAccount}>Cancel sign-in</button>}
+            {busyAuth && <button className="sidebar-auth-button" aria-label="Cancel sign-in" title="Cancel sign-in" onClick={cancelAccount}><span className="sidebar-icon" aria-hidden="true">×</span><span className="sidebar-label">Cancel sign-in</span></button>}
           </div>
         )}
       </aside>
 
       <main className="main">
+        {themeError && <div className="alert err" role="alert">{themeError}</div>}
         {!signedIn && authReady && tab !== 'account' && (
           <SignInGate onSignIn={addAccount} onDeviceSignIn={addDeviceAccount} onCancel={cancelAccount} signingIn={busyAuth} error={authError} />
         )}
@@ -181,7 +217,7 @@ export default function App() {
             addAccount={addAccount} addDeviceAccount={addDeviceAccount} setSignInMethod={setSignInMethod} cancelAccount={cancelAccount} switchAccount={switchAccount} signOut={signOut} busyAuth={busyAuth} authError={authError}
           />
         )}
-        {signedIn && tab === 'settings' && <SettingsView providers={providers} onCredentialsChanged={refreshProviders} />}
+        {signedIn && tab === 'settings' && <SettingsView key={`${account.homeAccountId}:${account.tenantId}`} providers={providers} onCredentialsChanged={refreshProviders} theme={theme} themeSaving={themeSaving} onThemeChange={changeTheme} />}
       </main>
       {deploymentNotification && <div
         className={`deployment-toast ${deploymentNotification.level || 'success'}`}

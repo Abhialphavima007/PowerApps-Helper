@@ -348,6 +348,24 @@ async function getToken(resourceUrl) {
   return r.accessToken;
 }
 
+// Optional tenant metadata lookup must never start an interactive sign-in.
+async function getTenantTokenSilent(expectedAccount) {
+  const account = (await allAccounts()).find((item) =>
+    item.homeAccountId === expectedAccount.homeAccountId && item.tenantId === expectedAccount.tenantId
+  );
+  if (!account || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(account.tenantId || '') ||
+      (account.environment && account.environment !== 'login.microsoftonline.com')) return null;
+  try {
+    const result = await dvPca.acquireTokenSilent({
+      account, scopes: scopeFor('https://management.azure.com'),
+      authority: `https://login.microsoftonline.com/${account.tenantId}`
+    });
+    return result?.accessToken || null;
+  } catch {
+    return null;
+  }
+}
+
 async function getMcpToken(resourceUrl) {
   const active = await getActiveAccount();
   if (!active) throw new Error('Sign in to a Microsoft account before using the deployment agent.');
@@ -396,6 +414,7 @@ module.exports = {
   signOut,
   status,
   getToken,
+  getTenantTokenSilent,
   getMcpToken,
   getGraphToken,
   GLOBAL_DISCO,

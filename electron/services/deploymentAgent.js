@@ -266,6 +266,7 @@ async function runAgentDeployment(snapshot, services) {
   const repairs = [];
   const attempted = new Set();
   let analysis = snapshot.analysis || null;
+  const storageWarnings = analysis?.stored?.warning ? [analysis.stored.warning] : [];
   let lastImport;
   try {
     if (!analysis) {
@@ -316,7 +317,10 @@ async function runAgentDeployment(snapshot, services) {
           version: snapshot.version, managed: snapshot.exportManaged
         });
       } catch (error) {
-        report('store', 'error', null, 'Storage warning: ' + error.message);
+        const warning = 'Export could not be saved to the configured storage: ' + error.message;
+        storageWarnings.push(warning);
+        stored = { warning };
+        report('store', 'error', null, warning);
       }
       analysis = { artifact, inspection, stored };
     }
@@ -342,10 +346,10 @@ async function runAgentDeployment(snapshot, services) {
             report('publish', 'done', 100, 'Published.');
           } catch (error) {
             report('publish', 'error', null, 'Publish warning: ' + error.message);
-            return { ok: true, warning: 'Import succeeded, but publishing failed: ' + error.message, attempts, repairs, analysis, importJobId: lastImport.importJobId };
+            return { ok: true, warning: [...storageWarnings, 'Import succeeded, but publishing failed: ' + error.message].join(' '), attempts, repairs, analysis, importJobId: lastImport.importJobId };
           }
         }
-        return { ok: true, attempts, repairs, analysis, importJobId: lastImport.importJobId };
+        return { ok: true, warning: storageWarnings.join(' '), attempts, repairs, analysis, importJobId: lastImport.importJobId };
       }
       report('import', 'error', null, lastImport.error || 'Import failed.');
       if (cycle === MAX_REPAIR_CYCLES) {
@@ -570,14 +574,17 @@ async function runAgentDeployment(snapshot, services) {
           version: snapshot.version, managed: snapshot.exportManaged
         });
       } catch (error) {
-        report('store', 'error', null, 'Storage warning: ' + error.message);
+        const warning = 'Re-export could not be saved to the configured storage: ' + error.message;
+        storageWarnings.push(warning);
+        stored = { warning };
+        report('store', 'error', null, warning);
       }
       analysis = { artifact, inspection, stored };
       report('reexport', 'done', 100, 'Re-exported the repaired solution.');
     }
   } catch (error) {
     report('agent', 'error', null, error.message);
-    return failure(error, attempts, repairs, analysis, lastImport);
+    return { ...failure(error, attempts, repairs, analysis, lastImport), warning: storageWarnings.join(' ') };
   }
 }
 

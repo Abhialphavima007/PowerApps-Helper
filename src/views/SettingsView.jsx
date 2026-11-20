@@ -33,8 +33,16 @@ function CredentialControl({ name, label, hint, saved, draft, editing, revealed,
   </div>;
 }
 
-export default function SettingsView({ providers, onCredentialsChanged }) {
+export default function SettingsView({ providers, onCredentialsChanged, theme, themeSaving, onThemeChange }) {
   const [settings, setSettings] = useState(null);
+  const [clientPreference, setClientPreference] = useState(null);
+  const [clientDraft, setClientDraft] = useState('');
+  const [clientLoading, setClientLoading] = useState(true);
+  const [clientSaving, setClientSaving] = useState(false);
+  const [clientError, setClientError] = useState('');
+  const [clientReload, setClientReload] = useState(0);
+  const clientRequest = useRef(0);
+  const clientSavePending = useRef(false);
   const [saving, setSaving] = useState(false);
   const [odBusy, setOdBusy] = useState(false);
   const [od, setOd] = useState(null);
@@ -59,6 +67,43 @@ export default function SettingsView({ providers, onCredentialsChanged }) {
     api.credentials.status().then(setCredentialStatus).catch((e) => setCredentialError(String(e)));
     return () => Object.values(revealTimers.current).forEach(clearTimeout);
   }, []);
+
+  useEffect(() => {
+    const request = ++clientRequest.current;
+    setClientLoading(true); setClientError('');
+    Promise.resolve().then(() => api.settings.getClientName()).then((result) => {
+      if (clientRequest.current !== request) return;
+      if (!result.ok) throw new Error(result.error || 'Could not load the tenant client name.');
+      setClientPreference(result); setClientDraft(result.clientName);
+    }).catch((error) => {
+      if (clientRequest.current === request) setClientError(error.message || 'Could not load the tenant client name.');
+    }).finally(() => {
+      if (clientRequest.current === request) setClientLoading(false);
+    });
+    return () => { clientRequest.current++; };
+  }, [clientReload]);
+
+  const saveClientName = async () => {
+    if (!clientPreference || clientLoading || clientSavePending.current) return;
+    const value = clientDraft.trim();
+    if (value === clientPreference.clientName) { setClientDraft(value); return; }
+    const request = clientRequest.current;
+    clientSavePending.current = true;
+    setClientSaving(true); setClientError('');
+    try {
+      const result = await api.settings.saveClientName(value, {
+        tenantId: clientPreference.tenantId, homeAccountId: clientPreference.homeAccountId
+      });
+      if (clientRequest.current !== request) return;
+      if (!result.ok) throw new Error(result.error || 'Could not save the client name.');
+      setClientPreference(result); setClientDraft(result.clientName);
+    } catch (error) {
+      if (clientRequest.current === request) setClientError(error.message || 'Could not save the client name.');
+    } finally {
+      clientSavePending.current = false;
+      if (clientRequest.current === request) setClientSaving(false);
+    }
+  };
 
   const hideCredential = (name) => {
     clearTimeout(revealTimers.current[name]);
@@ -149,10 +194,35 @@ export default function SettingsView({ providers, onCredentialsChanged }) {
   return (
     <div>
       <p className="h1">Settings</p>
-      <p className="sub">Choose where exported solutions are stored. Files are organized as <code>Account / Source → Target / Solution / version.zip</code>.</p>
+      <p className="sub">Choose where exported solutions are stored. New exports use <code>Base folder / Client / Source to Target / Solution / export files</code>.</p>
+
+      <div className="card">
+        <fieldset className="appearance-options" disabled={themeSaving}>
+          <legend>Appearance</legend>
+          <p className="muted">Choose light or dark mode. Your choice is saved on this computer.</p>
+          <div className="radio-row">
+            {['light', 'dark'].map((mode) => <label key={mode} className={'radio ' + (theme === mode ? 'sel' : '')}>
+              <input type="radio" name="appearance" value={mode} checked={theme === mode} onChange={() => onThemeChange(mode)} />
+              <span><b>{mode === 'light' ? 'Light mode' : 'Dark mode'}</b><span className="muted">{mode === 'light' ? 'Bright surfaces and dark text.' : 'Dark surfaces and light text.'}</span></span>
+            </label>)}
+          </div>
+        </fieldset>
+      </div>
 
       <div className="card">
         <h3>Solution storage</h3>
+        <div className="storage-client">
+          <label htmlFor="storage-client">Client name</label>
+          <input id="storage-client" value={clientDraft} maxLength={80} disabled={clientLoading || clientSaving || !clientPreference}
+            onChange={(event) => setClientDraft(event.target.value)} onBlur={saveClientName}
+            onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } }}
+            aria-describedby="storage-client-hint" aria-invalid={!!clientError} placeholder={clientLoading ? 'Loading tenant name…' : 'Client name'} />
+          <p id="storage-client-hint" className="muted">Filled from your signed-in tenant. Edit it for future exports; clear it to restore the automatic name. Edits are remembered per tenant.</p>
+          {clientPreference?.source === 'domain' && <p className="muted">Tenant display name is unavailable; using your organization domain.</p>}
+          {clientPreference?.source === 'tenant-id' && <p className="muted">Tenant display name is unavailable; using the tenant ID. You can enter a client name.</p>}
+          {clientSaving && <p className="muted" role="status">Saving client name…</p>}
+          {clientError && <div className="alert err" role="alert">{clientError} <button type="button" className="btn small secondary" onClick={() => clientPreference ? saveClientName() : setClientReload((value) => value + 1)}>Retry</button></div>}
+        </div>
         <div className="radio-row">
           <label className={'radio ' + (settings.storageMode === 'local' ? 'sel' : '')} onClick={() => update({ storageMode: 'local' })}>
             <input type="radio" readOnly checked={settings.storageMode === 'local'} />
