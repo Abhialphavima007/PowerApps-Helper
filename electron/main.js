@@ -1,8 +1,9 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, shell, dialog, Notification } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog, Notification, nativeTheme } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 
 try {
   require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
@@ -13,6 +14,7 @@ const dataverse = require('./services/dataverse');
 const graph = require('./services/graph');
 const zip = require('./services/solutionZip');
 const store = require('./services/store');
+const clientNames = require('./services/clientName');
 const ai = require('./services/ai');
 const git = require('./services/git');
 const credentials = require('./services/credentials');
@@ -33,13 +35,15 @@ const notifyDeployment = createDeploymentNotifier({
 });
 
 function createWindow() {
+  const theme = store.getSettings().theme;
+  nativeTheme.themeSource = theme;
   win = new BrowserWindow({
     width: 1200,
     height: 840,
     minWidth: 960,
     minHeight: 680,
     title: 'PowerApps Helper',
-    backgroundColor: '#0f1420',
+    backgroundColor: theme === 'light' ? '#f4f7fc' : '#0f1420',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -89,17 +93,21 @@ function ok(data) { return { ok: true, ...data }; }
 function fail(err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
 
 function sanitize(s) {
-  return String(s || 'unknown').replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, ' ').trim().slice(0, 80);
+  let name = String(s || '').replace(/[\\/:*?"<>|#%~\x00-\x1f]+/g, '_').replace(/\s+/g, ' ').trim().slice(0, 80).replace(/[. ]+$/g, '');
+  if (!name || name === '.' || name === '..') name = 'unknown';
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name)) name = '_' + name;
+  return name;
 }
 
 // Store an exported artifact per Settings: local structured folder or OneDrive.
 async function storeArtifact({ artifact, account, sourceEnv, targetEnv, solution, version, managed }) {
+  const client = await clientNames.get({ accountUsername: account });
   const settings = store.getSettings();
   const rel = path.join(
-    sanitize(account),
+    sanitize(client.clientName),
     `${sanitize(sourceEnv)} to ${sanitize(targetEnv)}`,
     sanitize(solution),
-    `${sanitize(version || 'export')}${managed ? '_managed' : ''}.zip`
+    `${sanitize(version || 'export')}${managed ? '_managed' : ''}_${new Date().toISOString().replace(/[:.]/g, '-')}_${crypto.randomUUID()}.zip`
   );
   if (settings.storageMode === 'onedrive') {
     stage('store', 'running', 0, 'Uploading to OneDrive…');
@@ -107,22 +115,37 @@ async function storeArtifact({ artifact, account, sourceEnv, targetEnv, solution
     const buf = fs.readFileSync(artifact);
     const r = await graph.uploadBuffer(remote, buf, (pct) => stage('store', 'running', pct, `Uploading to OneDrive… ${pct}%`));
     stage('store', 'done', 100, 'Stored in OneDrive.');
-    return { storage: 'onedrive', oneDriveUrl: r.webUrl, storedPath: remote };
+    return { storage: 'onedrive', oneDriveUrl: r.webUrl, storedPath: remote, organized: true };
   }
   const dest = path.join(settings.localFolder, rel);
   fs.mkdirSync(path.dirname(dest), { recursive: true });
-  fs.copyFileSync(artifact, dest);
+  fs.copyFileSync(artifact, dest, fs.constants.COPYFILE_EXCL);
   stage('store', 'done', 100, 'Saved to local folder.');
-  return { storage: 'local', storedPath: dest };
+  return { storage: 'local', storedPath: dest, organized: true };
 }
 
-function saveDeploymentRecord(record) {
+async function saveDeploymentRecord(record) {
   const saved = store.addDeployment(record);
   if (record.notes) {
     const notesFile = path.join(store.artifactsDir(), saved.id + '_notes.md');
     fs.writeFileSync(notesFile, record.notes, 'utf8');
-    store.updateDeployment(saved.id, { notesFile });
-    saved.notesFile = notesFile;
+    const patch = { notesFile };
+    if (record.stored?.organized && record.stored.storedPath) {
+      const organizedNotes = record.stored.storedPath.replace(/\.zip$/i, '.notes.md');
+      try {
+        if (record.stored.storage === 'onedrive') {
+          const uploaded = await graph.uploadBuffer(organizedNotes, Buffer.from(record.notes, 'utf8'));
+          patch.notesOneDriveUrl = uploaded.webUrl;
+        } else if (record.stored.storage === 'local') {
+          fs.copyFileSync(notesFile, organizedNotes, fs.constants.COPYFILE_EXCL);
+          patch.notesFile = organizedNotes;
+        }
+      } catch (error) {
+        patch.warning = [record.warning, 'Deployment notes could not be saved beside the export: ' + error.message].filter(Boolean).join(' ');
+      }
+    }
+    Object.assign(saved, patch);
+    store.updateDeployment(saved.id, patch);
   }
   return saved;
 }
@@ -154,7 +177,20 @@ function registerIpc() {
 
   // --- Settings & storage ---
   ipcMain.handle('settings:get', () => store.getSettings());
-  ipcMain.handle('settings:save', (_e, patch) => store.saveSettings(patch));
+  ipcMain.handle('settings:clientName:get', async () => {
+    try { return ok(await clientNames.get()); } catch (error) { return fail(error); }
+  });
+  ipcMain.handle('settings:clientName:save', async (_event, value, account) => {
+    try { return ok(await clientNames.save(value, account)); } catch (error) { return fail(error); }
+  });
+  ipcMain.handle('settings:save', (_e, patch) => {
+    const settings = store.saveSettings(patch);
+    if (Object.prototype.hasOwnProperty.call(patch, 'theme')) {
+      nativeTheme.themeSource = settings.theme;
+      if (win && !win.isDestroyed()) win.setBackgroundColor(settings.theme === 'light' ? '#f4f7fc' : '#0f1420');
+    }
+    return settings;
+  });
   ipcMain.handle('credentials:status', () => credentials.status());
   ipcMain.handle('credentials:save', (_e, name, value) => {
     try { return ok({ status: credentials.save(name, value) }); } catch (e) { return fail(e); }
@@ -287,7 +323,8 @@ function registerIpc() {
           solution: solutionName, version: newVersion, managed: exportManaged
         });
       } catch (e) {
-        stage('store', 'error', null, 'Storage warning: ' + e.message);
+        stored = { warning: 'Export could not be saved to the configured storage: ' + e.message };
+        stage('store', 'error', null, stored.warning);
       }
       return ok({ artifact: outFile, inspection, stored });
     } catch (e) {
@@ -320,7 +357,8 @@ function registerIpc() {
       let warning = result.warning || '';
       let saved = null;
       try {
-        saved = saveDeploymentRecord(deploymentAgent.makeHistoryRecord(snapshot, result, current.account.username));
+        saved = await saveDeploymentRecord(deploymentAgent.makeHistoryRecord(snapshot, result, current.account.username));
+        warning = saved.warning || warning;
       } catch (error) {
         warning = [warning, 'Deployment history could not be saved: ' + error.message].filter(Boolean).join(' ');
       }
@@ -388,13 +426,6 @@ function registerIpc() {
 
   // === Persist a deployment record + write notes file ===
   ipcMain.handle('deploy:record', async (_e, record) => {
-    const saved = store.addDeployment(record);
-    if (record.notes) {
-      const notesFile = path.join(store.artifactsDir(), `${saved.id}_notes.md`);
-      fs.writeFileSync(notesFile, record.notes, 'utf8');
-      store.updateDeployment(saved.id, { notesFile });
-      saved.notesFile = notesFile;
-    }
-    return saved;
+    return saveDeploymentRecord(record);
   });
 }

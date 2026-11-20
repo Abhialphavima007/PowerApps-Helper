@@ -27,7 +27,9 @@ async function gfetch(pathOrUrl, { method = 'GET', body, headers = {}, absolute 
   if (!res.ok) {
     let msg = text;
     try { msg = JSON.parse(text)?.error?.message || text; } catch {}
-    throw new Error(`Graph ${res.status}: ${msg}`);
+    const error = new Error(`Graph ${res.status}: ${msg}`);
+    error.status = res.status;
+    throw error;
   }
   return text ? JSON.parse(text) : {};
 }
@@ -48,9 +50,33 @@ function encodePath(p) {
   return p.split('/').filter(Boolean).map(encodeURIComponent).join('/');
 }
 
+async function ensureFolders(remotePath) {
+  const parts = remotePath.split('/').filter(Boolean).slice(0, -1);
+  let parent = '';
+  for (const name of parts) {
+    if (name === '.' || name === '..') throw new Error('OneDrive folder names cannot be . or ...');
+    const current = [parent, name].filter(Boolean).join('/');
+    let item;
+    try { item = await gfetch(`/me/drive/root:/${encodePath(current)}`); }
+    catch (error) {
+      if (error.status !== 404) throw error;
+      const parentPath = parent ? `/me/drive/root:/${encodePath(parent)}:/children` : '/me/drive/root/children';
+      try {
+        item = await gfetch(parentPath, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, folder: {}, '@microsoft.graph.conflictBehavior': 'fail' }) });
+      } catch (createError) {
+        if (createError.status !== 409) throw createError;
+        item = await gfetch(`/me/drive/root:/${encodePath(current)}`);
+      }
+    }
+    if (!item.folder) throw new Error(`OneDrive path component is not a folder: ${name}`);
+    parent = current;
+  }
+}
+
 // Upload a Buffer to /me/drive/root:/<remotePath> using an upload session
 // (works for large solution files). Reports percent via onProgress.
 async function uploadBuffer(remotePath, buffer, onProgress) {
+  await ensureFolders(remotePath);
   const t = await token();
   const sessRes = await fetch(
     `${GRAPH}/me/drive/root:/${encodePath(remotePath)}:/createUploadSession`,

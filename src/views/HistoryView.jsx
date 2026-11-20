@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import WorkItemDetails from '../components/WorkItemDetails.jsx';
 
@@ -10,10 +10,15 @@ export default function HistoryView() {
   const [target, setTarget] = useState('');
   const [status, setStatus] = useState('');
   const [query, setQuery] = useState('');
-  const [message, setMessage] = useState('');
+  const [message, setMessage] = useState(null);
   const [error, setError] = useState('');
+  const [exporting, setExporting] = useState(false);
+  const viewButton = useRef(null);
 
-  const load = async () => setItems(await api.history.list());
+  const load = async () => {
+    try { setItems(await api.history.list()); setError(''); }
+    catch (e) { setError(String(e.message || e)); }
+  };
   useEffect(() => { load(); }, []);
 
   const sourceOptions = useMemo(() => [...new Map(items.filter((item) => item.sourceEnv).map((item) => [item.sourceUrl || item.sourceEnv, { id: item.sourceUrl || item.sourceEnv, label: item.sourceEnv }])).values()].sort((a, b) => a.label.localeCompare(b.label)), [items]);
@@ -37,25 +42,28 @@ export default function HistoryView() {
   const selected = items.find((item) => item.id === selectedId);
 
   const exportItems = async (format) => {
-    setError(''); setMessage('');
-    const result = await api.history.export(filtered.map((item) => item.id), format);
-    if (result.ok) setMessage(`Exported ${result.count} record${result.count === 1 ? '' : 's'} to ${result.path}`);
-    else if (!result.canceled) setError(result.error || 'Could not export history.');
+    setError(''); setMessage(null); setExporting(true);
+    try {
+      const result = await api.history.export(filtered.map((item) => item.id), format);
+      if (result.ok) setMessage({ text: `Exported ${result.count} record${result.count === 1 ? '' : 's'} as ${format.toUpperCase()}.`, path: result.path });
+      else if (!result.canceled) setError(result.error || 'Could not export history.');
+    } catch (e) { setError(String(e.message || e)); }
+    finally { setExporting(false); }
   };
   const deleteItems = async (ids) => {
     if (!ids.length || !window.confirm(`Delete ${ids.length} history record${ids.length === 1 ? '' : 's'}? Exported solution packages and notes files will remain on disk.`)) return;
-    setError(''); setMessage('');
+    setError(''); setMessage(null);
     try {
       const result = await api.history.delete(ids);
       setSelectedId('');
       await load();
-      setMessage(`Deleted ${result.deleted} history record${result.deleted === 1 ? '' : 's'}.`);
+      setMessage({ text: `Deleted ${result.deleted} history record${result.deleted === 1 ? '' : 's'}.` });
     } catch (e) { setError(String(e)); }
   };
 
   return (
-    <div>
-      <div className="toolbar">
+    <div className="history-page">
+      <div className="toolbar history-heading">
         <div style={{ flex: 1 }}>
           <p className="h1" style={{ margin: 0 }}>Deployment history</p>
           <p className="sub" style={{ margin: 0 }}>Every env-to-env deployment, with notes and dependencies.</p>
@@ -63,30 +71,37 @@ export default function HistoryView() {
         <button className="btn small secondary" onClick={load}>Refresh</button>
       </div>
 
+      <div className="history-stats" aria-label="Deployment summary">
+        <div><span>All deployments</span><strong>{items.length}</strong></div>
+        <div><span>Successful</span><strong>{items.filter((item) => item.status === 'success').length}</strong></div>
+        <div><span>Failed</span><strong>{items.filter((item) => item.status === 'failed').length}</strong></div>
+      </div>
+
       <div className="card history-filters">
+        <h3>Find deployments</h3>
         <div className="filter-grid">
-          <div><label>Period</label><select value={period} onChange={(event) => setPeriod(event.target.value)}><option value="all">All time</option><option value="day">Today</option><option value="week">This week</option><option value="month">This month</option></select></div>
-          <div><label>Source environment</label><select value={source} onChange={(event) => setSource(event.target.value)}><option value="">Any source</option>{sourceOptions.map((option) => <option key={option.id} value={option.id}>{option.label}{option.id !== option.label ? ` · ${option.id}` : ''}</option>)}</select></div>
-          <div><label>Target environment</label><select value={target} onChange={(event) => setTarget(event.target.value)}><option value="">Any target</option>{targetOptions.map((option) => <option key={option.id} value={option.id}>{option.label}{option.id !== option.label ? ` · ${option.id}` : ''}</option>)}</select></div>
-          <div><label>Status</label><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">Any status</option><option value="success">Success</option><option value="failed">Failed</option><option value="pending">Pending</option></select></div>
-          <div><label>Solution or work item</label><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search history…" /></div>
+          <div><label htmlFor="history-period">Period</label><select id="history-period" value={period} onChange={(event) => setPeriod(event.target.value)}><option value="all">All time</option><option value="day">Today</option><option value="week">This week</option><option value="month">This month</option></select></div>
+          <div><label htmlFor="history-source">Source environment</label><select id="history-source" value={source} onChange={(event) => setSource(event.target.value)}><option value="">Any source</option>{sourceOptions.map((option) => <option key={option.id} value={option.id}>{option.label}{option.id !== option.label ? ` · ${option.id}` : ''}</option>)}</select></div>
+          <div><label htmlFor="history-target">Target environment</label><select id="history-target" value={target} onChange={(event) => setTarget(event.target.value)}><option value="">Any target</option>{targetOptions.map((option) => <option key={option.id} value={option.id}>{option.label}{option.id !== option.label ? ` · ${option.id}` : ''}</option>)}</select></div>
+          <div><label htmlFor="history-status">Status</label><select id="history-status" value={status} onChange={(event) => setStatus(event.target.value)}><option value="">Any status</option><option value="success">Success</option><option value="failed">Failed</option><option value="pending">Pending</option></select></div>
+          <div><label htmlFor="history-query">Solution or work item</label><input id="history-query" type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search history…" /></div>
         </div>
         <div className="toolbar" style={{ marginTop: 14, marginBottom: 0 }}>
           <span className="muted" style={{ flex: 1 }}>{filtered.length} of {items.length} deployments</span>
-          <button className="btn small secondary" disabled={!filtered.length} onClick={() => exportItems('csv')}>Export CSV</button>
-          <button className="btn small secondary" disabled={!filtered.length} onClick={() => exportItems('json')}>Export JSON</button>
-          <button className="btn small danger" disabled={!filtered.length} onClick={() => deleteItems(filtered.map((item) => item.id))}>Delete filtered</button>
+          <button className="btn small secondary" disabled={!filtered.length || exporting} onClick={() => exportItems('csv')}>Export CSV</button>
+          <button className="btn small secondary" disabled={!filtered.length || exporting} onClick={() => exportItems('json')}>Export JSON</button>
+          <button className="btn small danger" disabled={!filtered.length || exporting} onClick={() => deleteItems(filtered.map((item) => item.id))}>Delete filtered</button>
         </div>
       </div>
-      {error && <div className="alert err">{error}</div>}
-      {message && <div className="alert info">{message}</div>}
+      {error && <div className="alert err" role="alert">{error}</div>}
+      {message && <div className="alert info history-message" role="status"><span>{message.text}</span>{message.path && <button className="btn small secondary" onClick={() => api.util.revealPath(message.path).catch((e) => setError(String(e.message || e)))}>Show file</button>}<button className="history-dismiss" aria-label="Dismiss message" onClick={() => setMessage(null)}>×</button></div>}
 
       {items.length === 0 ? (
         <div className="card"><div className="empty">No deployments yet.</div></div>
       ) : filtered.length === 0 ? (
         <div className="card"><div className="empty">No deployments match these filters.</div></div>
       ) : (
-        <div className="card" style={{ padding: 0 }}>
+        <div className="card history-table-wrap">
           <table>
             <thead>
               <tr>
@@ -112,7 +127,7 @@ export default function HistoryView() {
                       {d.status}
                     </span>
                   </td>
-                  <td><button className="btn small secondary" onClick={() => setSelectedId(d.id)}>View</button>{' '}<button className="btn small danger" onClick={() => deleteItems([d.id])}>Delete</button></td>
+                  <td className="history-row-actions"><button className="btn small secondary" onClick={(event) => { viewButton.current = event.currentTarget; setSelectedId(d.id); }}>View</button>{' '}<button className="btn small danger" onClick={() => deleteItems([d.id])}>Delete</button></td>
                 </tr>
               ))}
             </tbody>
@@ -120,19 +135,26 @@ export default function HistoryView() {
         </div>
       )}
 
-      {selected && <Detail d={selected} onClose={() => setSelectedId('')} />}
+      {selected && <Detail d={selected} returnFocus={viewButton} onClose={() => setSelectedId('')} />}
     </div>
   );
 }
 
-function Detail({ d, onClose }) {
+function Detail({ d, onClose, returnFocus }) {
+  const dialogRef = useRef(null);
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    dialog.showModal();
+    return () => { if (dialog.open) dialog.close(); returnFocus.current?.focus(); };
+  }, []);
   const deps = d.dependencies || [];
   return (
-    <div className="card">
-      <div className="toolbar">
-        <h3 style={{ margin: 0, flex: 1 }}>{d.solution} · v{d.version}</h3>
-        <button className="btn small secondary" onClick={onClose}>Close</button>
+    <dialog ref={dialogRef} className="history-dialog" aria-labelledby="history-detail-title" onCancel={(event) => { event.preventDefault(); onClose(); }}>
+      <div className="history-dialog-head">
+        <div><span className="eyebrow">DEPLOYMENT DETAILS</span><h2 id="history-detail-title">{d.solution} · v{d.version}</h2></div>
+        <button className="btn small secondary" autoFocus onClick={onClose}>Close</button>
       </div>
+      <div className="history-dialog-body">
       <div className="grid2" style={{ marginBottom: 14 }}>
         <div className="k">When</div><div>{new Date(d.createdAt).toLocaleString()}</div>
         <div className="k">Route</div><div>{d.sourceEnv} → {d.targetEnv}</div>
@@ -193,8 +215,10 @@ function Detail({ d, onClose }) {
       {d.notesFile && (
         <div className="right">
           <button className="btn small secondary" onClick={() => api.util.revealPath(d.notesFile)}>Open notes file</button>
+          {d.notesOneDriveUrl && <button className="btn small secondary" onClick={() => api.util.openExternal(d.notesOneDriveUrl)}>Open notes in OneDrive</button>}
         </div>
       )}
-    </div>
+      </div>
+    </dialog>
   );
 }

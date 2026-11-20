@@ -26,9 +26,13 @@ function init(userDataPath) {
 
 function defaultSettings() {
   return {
+    theme: 'dark', // 'dark' | 'light'
     storageMode: 'local', // 'local' | 'onedrive'
     localFolder: path.join(baseDir, 'solutions'),
     oneDriveRoot: 'PowerApps Helper',
+    clientName: '',
+    clientNamesByTenant: {},
+    clientNameLegacyTenantId: '',
     azureDevOpsOrgUrl: '',
     azureFoundryEndpoint: '',
     aiModels: { openai: 'gpt-4.1-mini', claude: 'claude-sonnet-4-5-20250929', grok: 'grok-4', gemini: 'gemini-2.5-flash', foundry: '' }
@@ -39,13 +43,18 @@ function getSettings() {
   try {
     const defaults = defaultSettings();
     const saved = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
-    return { ...defaults, ...saved, aiModels: { ...defaults.aiModels, ...saved.aiModels } };
+    return { ...defaults, ...saved, theme: saved.theme === 'light' ? 'light' : 'dark',
+      clientNamesByTenant: saved.clientNamesByTenant && typeof saved.clientNamesByTenant === 'object' && !Array.isArray(saved.clientNamesByTenant) ? saved.clientNamesByTenant : {},
+      aiModels: { ...defaults.aiModels, ...saved.aiModels } };
   } catch {
     return defaultSettings();
   }
 }
 
 function saveSettings(patch) {
+  if (Object.prototype.hasOwnProperty.call(patch, 'theme') && !['dark', 'light'].includes(patch.theme)) {
+    throw new Error('Choose light or dark mode.');
+  }
   const current = getSettings();
   const next = { ...current, ...patch, aiModels: { ...current.aiModels, ...patch.aiModels } };
   fs.writeFileSync(settingsFile, JSON.stringify(next, null, 2));
@@ -54,6 +63,27 @@ function saveSettings(patch) {
 
 function artifactsDir() {
   return path.join(baseDir, 'artifacts');
+}
+
+function getClientNamePreference(tenantKey) {
+  let settings = getSettings();
+  // Preserve a name entered before tenant-specific preferences were introduced.
+  if (!settings.clientNameLegacyTenantId && typeof settings.clientName === 'string' && settings.clientName.trim()) {
+    const names = settings.clientNamesByTenant;
+    settings = saveSettings({
+      clientNameLegacyTenantId: tenantKey,
+      clientNamesByTenant: { ...names, [tenantKey]: Object.prototype.hasOwnProperty.call(names, tenantKey) ? names[tenantKey] : settings.clientName.trim() }
+    });
+  }
+  const value = settings.clientNamesByTenant[tenantKey];
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function saveClientNamePreference(tenantKey, value) {
+  if (typeof value !== 'string' || value.trim().length > 80) throw new Error('Enter a client name of up to 80 characters.');
+  getClientNamePreference(tenantKey);
+  const settings = getSettings();
+  saveSettings({ clientNamesByTenant: { ...settings.clientNamesByTenant, [tenantKey]: value.trim() } });
 }
 
 function readAll() {
@@ -109,6 +139,8 @@ module.exports = {
   artifactsDir,
   getSettings,
   saveSettings,
+  getClientNamePreference,
+  saveClientNamePreference,
   listDeployments,
   getDeployment,
   addDeployment,

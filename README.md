@@ -12,12 +12,13 @@ A cross-platform (Windows, macOS, and Linux) desktop app for deploying Microsoft
 
 - **Sign in** with Microsoft credentials (MFA supported) — choose browser or device code. No app registration is needed when your tenant permits the default public client.
 - **Multiple accounts** — connect several work accounts, switch the active one, and the environment list follows the active account.
+- **Light and Dark mode** — switch instantly using the sun/moon button in the sidebar or **Settings → Appearance**. Your choice is remembered on this computer.
 - **List your environments** automatically via the Global Discovery Service.
 - Pick a **source** and **target** environment and an **unmanaged source solution**; export it as a managed or unmanaged package.
 - **Bump the version** before export (auto-suggested).
 - **Describe what's changing** + link **Azure DevOps work items** — load user stories, child tasks, descriptions, acceptance criteria, and comments; use AI to draft an editable change summary.
 - **Export & analyze** the solution: **content summary**, **root components**, and package dependency declarations. You can review these before importing.
-- **Store the exported solution** to **OneDrive** (for Business, same account) or a **local folder**, organized as `Account / Source → Target / Solution / version.zip`. Chosen in **Settings**.
+- **Store exported solutions and deployment notes** to **OneDrive** (for Business, same account) or a **local folder**, organized as `Base folder / Client / Source to Target / Solution / export files`. Choose the storage location and client name in **Settings**.
 - **Deployment notes** — the earlier change summary carries into the Review step as editable notes. You can optionally generate a structured Power Platform Pipelines-style version with a local template or **Azure AI Foundry, OpenAI, Claude, Grok, or Gemini**.
 - **Import to the target** with a **live progress bar** (real percentage from the import job), then publish for unmanaged solutions.
 - **Deploy with agent (optional)** — choose **Continue with agent** in Configure to reach deployment before exporting, or export and review first. The agent exports if needed, imports into the target, and reacts only to dependencies reported by a failed target import. It captures the import error and import-job log at failure time, adds identifiable components to the selected unmanaged source solution, publishes source customizations once per repair cycle, re-exports, and retries up to five repair cycles. It retains the selected environments, Azure DevOps stories, description, and notes. Each repair method and import attempt is recorded in history.
@@ -27,14 +28,21 @@ A cross-platform (Windows, macOS, and Linux) desktop app for deploying Microsoft
 
 ## Settings & storage
 
+Choose **Light mode** or **Dark mode** under **Settings → Appearance**, or use the sidebar sun/moon button even before signing in. Dark is the default for existing and new installations. Switching applies immediately without restarting or clearing your deployment draft. A failed preference save restores the previous mode and shows an alert.
+
+Both modes use an Apple-inspired glass appearance with frosted panels, rounded controls, and soft shadows. Light uses a blue/mint canvas; Dark uses a deep blue/teal canvas. Content width, spacing, and responsive arrangement are shared, so switching themes preserves the layout. Surfaces become opaque when backdrop filtering is unavailable or reduced transparency is requested.
+
 Open the **Settings** tab to choose where exported solutions land:
 
+- **Client name** — fills automatically from the signed-in tenant and is used as the first folder below the selected base. You can edit it; edits are saved separately for each tenant. Clear the field to restore the automatic name. If Microsoft tenant details cannot be read silently, the organization domain is used (or the tenant ID for guest accounts). The setting applies to future exports; existing files and history are not moved. See [tenant client-name notes](docs/tenant-client-name.md).
 - **OneDrive for Business** — uploaded via Microsoft Graph for the *same* signed-in account. Because Microsoft doesn't let the Azure CLI client call Graph, OneDrive uses a separate Graph-capable public client (the **Microsoft Graph CLI** client, `14d82eec-…`). The first **Connect OneDrive** triggers a quick sign-in/consent for that client (still no app registration). Override with `AZURE_GRAPH_CLIENT_ID` if needed.
 - **Local folder** — pick any folder; solutions are written in the same structured layout for easy tracking.
 - **AI credentials** — save API keys for OpenAI, Claude, Grok, Gemini, and Azure AI Foundry in the encrypted local credential store. Saved keys remain masked; revealing one requires Windows Hello and it hides again after 30 seconds. Azure AI Foundry also needs a model inference endpoint and model or deployment name. A Codex or ChatGPT sign-in does not supply an OpenAI API key.
 - **Azure DevOps** — enter the organization URL and a Personal Access Token with **Work Items: Read** scope. Preview one or more comma-separated stories in Settings. In a deployment, enter comma-separated IDs, `AB#` references, or work item URLs; the app fetches each item, its full child tree, related items, descriptions, acceptance criteria, status dates, and comments with progress shown for large trees. The AI summary button processes large sets in parts and writes a plain-English problem, task journey, and outcome for each story. Review it in the full-screen view or edit the change description before deployment. Work item details are sent to the chosen AI provider only when requesting AI output.
 
 The manual import path remains available. Package dependency declarations are advisory and never trigger agent source repairs. The agent only makes a repair after a failed target import identifies a missing component. If the target error omits its GUID, the agent uses one exact type-and-schema match from the package or source environment. A missing table already exported as a shell can be added; before another import, the agent checks that the re-export contains the table beyond a shell. It stops on missing or ambiguous diagnostics, repeated failures, inaccessible source solutions, or unsupported component types. If export itself fails, there is no package to import, so the agent stops and reports that export error.
+
+Each source export, including agent repair re-exports, gets a distinct ZIP file even when the version is unchanged. Deployment notes are also saved beside the final stored ZIP after the deployment is recorded. Staging copies remain in app data for imports and optional Git commits. Storage failures are reported; the staging copy remains available. Packages selected from disk are not moved. History CSV/JSON exports still use the location selected in the save dialog.
 
 ### Agent deployment and Microsoft Dataverse MCP
 
@@ -116,7 +124,23 @@ npm run package:linux  # Linux AppImage
 
 Output goes to `release/`.
 
+For a renderer build without packaging, run `npm run build:renderer`. For changed Electron JavaScript, `node --check <file>` checks syntax; `git diff --check` checks patch whitespace. These checks do not verify deployment, OneDrive, or the desktop UI.
+
+### Theme checks
+
+Verified on Windows with the installed dependencies:
+
+```bash
+npm run build:renderer
+node --test --experimental-test-coverage tests/theme.test.cjs
+npx --no-install electron tests/theme.ui.cjs
+```
+
+The Electron check uses the built renderer, synthetic accounts, and temporary settings without cloud calls. It checks switching, persistence, failure recovery, keyboard controls, retained deployment drafts, and sampled text contrast in both palettes. See [theme validation notes](docs/light-dark-theme.md) for evidence and remaining checks.
+
 ## Automated releases (GitHub Actions)
+
+The next app version is **0.1.4**. See [release notes and local build evidence](docs/releases/0.1.4.md).
 
 Every push to `main` starts `.github/workflows/release.yml`. It builds Windows
 installers (`.exe`), macOS disk images (`.dmg`), and Linux AppImages for x64 and
