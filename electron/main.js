@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, shell, dialog, Notification, nativeTheme } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog, Notification, nativeTheme, powerSaveBlocker } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -20,13 +20,24 @@ const git = require('./services/git');
 const credentials = require('./services/credentials');
 const azureDevOps = require('./services/azureDevOps');
 const windowsHello = require('./services/windowsHello');
-const dataverseMcp = require('./services/dataverseMcp');
+const { createDeploymentPower } = require('./services/deploymentPower');
 const deploymentAgent = require('./services/deploymentAgent');
 const { createDeploymentNotifier } = require('./services/deploymentNotifications');
+const { createDeploymentAutomation, settings: automationSettings } = require('./services/deploymentAutomation');
+const { createTeamsNotifications } = require('./services/teamsNotifications');
+const teamsCodex = require('./services/teamsCodex');
+const { setupFailure: workflowSetupFailure } = require('./services/teamsWorkflow');
 
 const isDev = process.env.NODE_ENV === 'development';
-const useDataverseMcp = /^true$/i.test(process.env.DATAVERSE_MCP_ENABLED || '');
+const deploymentPower = createDeploymentPower(powerSaveBlocker);
+function deploymentHandler(handler) {
+  return (...args) => deploymentPower.run(() => handler(...args))
+    .catch(error => fail(error));
+}
 let win;
+let deploymentAutomation;
+let teamsNotifications;
+let teamsBridge;
 const activeNotifications = new Set();
 const notifyDeployment = createDeploymentNotifier({
   Notification,
@@ -58,13 +69,29 @@ function createWindow() {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   if (process.platform === 'win32') app.setAppUserModelId('com.alphavima.powerappshelper');
-  store.init(app.getPath('userData'));
   credentials.init(app.getPath('userData'));
+  if (process.argv.includes('--teams-mcp')) {
+    // The headless MCP adapter shares only the encrypted connector credential.
+    await teamsCodex.runStdio({ app, userDataPath: app.getPath('userData'), credentials });
+    return;
+  }
+  store.init(app.getPath('userData'));
   auth.init(app.getPath('userData'), (data) => {
     if (win && !win.isDestroyed()) win.webContents.send('auth:progress', data);
   });
+  deploymentAutomation = createDeploymentAutomation({ auth, getSettings: store.getSettings,
+    userDataPath: app.getPath('userData'), notify: notifyDeployment });
+  teamsNotifications = createTeamsNotifications({ auth, credentials, getSettings: store.getSettings, notify: notifyDeployment,
+    onStatus: data => { if (win && !win.isDestroyed()) win.webContents.send('teams:progress', data); } });
+  teamsBridge = await teamsCodex.startBridge({ userDataPath: app.getPath('userData'), credentials,
+    teams: teamsNotifications, auth, getSettings: store.getSettings });
+  try { await teamsBridge.configure(); } catch { notifyDeployment('Teams connector needs attention', 'Optional Codex access could not start. Check Teams settings and secure credential storage.'); }
+  const reportingTimer = setInterval(() => { void deploymentAutomation.flush().catch(() => {}); }, 60000);
+  reportingTimer.unref();
+  app.once('before-quit', () => clearInterval(reportingTimer));
+  app.once('before-quit', () => { teamsNotifications.dispose(); teamsBridge.dispose(); });
   registerIpc();
   createWindow();
   app.on('activate', () => {
@@ -100,7 +127,7 @@ function sanitize(s) {
 }
 
 // Store an exported artifact per Settings: local structured folder or OneDrive.
-async function storeArtifact({ artifact, account, sourceEnv, targetEnv, solution, version, managed }) {
+async function storeArtifact({ artifact, account, sourceEnv, targetEnv, solution, version, managed, report = stage }) {
   const client = await clientNames.get({ accountUsername: account });
   const settings = store.getSettings();
   const rel = path.join(
@@ -110,17 +137,17 @@ async function storeArtifact({ artifact, account, sourceEnv, targetEnv, solution
     `${sanitize(version || 'export')}${managed ? '_managed' : ''}_${new Date().toISOString().replace(/[:.]/g, '-')}_${crypto.randomUUID()}.zip`
   );
   if (settings.storageMode === 'onedrive') {
-    stage('store', 'running', 0, 'Uploading to OneDrive…');
+    report('store', 'running', 0, 'Uploading to OneDrive…');
     const remote = (settings.oneDriveRoot || 'PowerApps Helper') + '/' + rel.split(path.sep).join('/');
     const buf = fs.readFileSync(artifact);
-    const r = await graph.uploadBuffer(remote, buf, (pct) => stage('store', 'running', pct, `Uploading to OneDrive… ${pct}%`));
-    stage('store', 'done', 100, 'Stored in OneDrive.');
+    const r = await graph.uploadBuffer(remote, buf, (pct) => report('store', 'running', pct, `Uploading to OneDrive… ${pct}%`));
+    report('store', 'done', 100, 'Stored in OneDrive.');
     return { storage: 'onedrive', oneDriveUrl: r.webUrl, storedPath: remote, organized: true };
   }
   const dest = path.join(settings.localFolder, rel);
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   fs.copyFileSync(artifact, dest, fs.constants.COPYFILE_EXCL);
-  stage('store', 'done', 100, 'Saved to local folder.');
+  report('store', 'done', 100, 'Saved to local folder.');
   return { storage: 'local', storedPath: dest, organized: true };
 }
 
@@ -177,31 +204,82 @@ function registerIpc() {
 
   // --- Settings & storage ---
   ipcMain.handle('settings:get', () => store.getSettings());
+  ipcMain.handle('automation:status', async () => {
+    try { return await deploymentAutomation.setupStatus(); } catch (error) { return fail(error); }
+  });
+  ipcMain.handle('automation:retry', async () => {
+    try { await deploymentAutomation.flush(); return await deploymentAutomation.setupStatus(); } catch (error) { return fail(error); }
+  });
   ipcMain.handle('settings:clientName:get', async () => {
     try { return ok(await clientNames.get()); } catch (error) { return fail(error); }
   });
   ipcMain.handle('settings:clientName:save', async (_event, value, account) => {
     try { return ok(await clientNames.save(value, account)); } catch (error) { return fail(error); }
   });
-  ipcMain.handle('settings:save', (_e, patch) => {
+  ipcMain.handle('settings:save', async (_e, patch) => {
+    if (patch.teamsNotifications) teamsNotifications.assertReady(patch.teamsNotifications);
     const settings = store.saveSettings(patch);
+    if (Object.prototype.hasOwnProperty.call(patch, 'teamsNotifications')) {
+      teamsNotifications.configure();
+      try { await teamsBridge.configure(); }
+      catch { notifyDeployment('Teams connector needs attention', 'Teams settings were saved, but optional Codex access could not start.'); }
+    }
     if (Object.prototype.hasOwnProperty.call(patch, 'theme')) {
       nativeTheme.themeSource = settings.theme;
       if (win && !win.isDestroyed()) win.setBackgroundColor(settings.theme === 'light' ? '#f4f7fc' : '#0f1420');
     }
     return settings;
   });
+  ipcMain.handle('teams:connect', async (_event, expectedTransport) => {
+    if (agentBusy) return fail(new Error('Wait for the deployment agent to finish before connecting Teams.'));
+    try { return await teamsNotifications.connect(expectedTransport); } catch (error) { return fail(error); }
+  });
+  ipcMain.handle('teams:checkWorkflow', () => {
+    try { return teamsNotifications.checkWorkflow(); } catch (error) { return fail(error); }
+  });
+  ipcMain.handle('teams:revealWorkflow', async () => {
+    if (revealPending) return fail(new Error('A Windows Hello verification is already in progress.'));
+    revealPending = true;
+    try {
+      if (!teamsNotifications.workflowStatus().configured) throw new Error('No saved workflow address is available to reveal.');
+      const verification = await windowsHello.verify();
+      if (!verification.ok) throw new Error(`Windows Hello did not verify your identity: ${verification.message}`);
+      return ok({ value: teamsNotifications.revealWorkflow() });
+    } catch (error) { return fail(error); }
+    finally { revealPending = false; }
+  });
+  ipcMain.handle('teams:saveWorkflow', async (_event, url, choices) => {
+    try {
+      let settings;
+      const workflow = teamsNotifications.saveWorkflow(url, choices, config => {
+        settings = store.saveSettings({ teamsNotifications: config });
+      });
+      teamsNotifications.configure();
+      let warning = '';
+      try { await teamsBridge.configure(); }
+      catch { warning = 'Workflow and settings saved, but optional Codex access could not start. Check secure OS credential storage and save Teams settings again.'; }
+      return ok({ workflow, settings, warning });
+    } catch (error) { return workflowSetupFailure(error); }
+  });
+  ipcMain.handle('teams:removeWorkflow', () => {
+    try { return ok({ workflow: teamsNotifications.removeWorkflow() }); }
+    catch { return fail(new Error('Workflow setup could not be removed. Check secure OS credential storage.')); }
+  });
+  ipcMain.handle('teams:status', () => ({ ok: true, runs: teamsNotifications.list(), workflow: teamsNotifications.workflowStatus(),
+    bridge: teamsBridge.status(),
+    mcpConfiguration: { command: process.execPath, args: app.isPackaged ? ['--teams-mcp'] : [app.getAppPath(), '--teams-mcp'] } }));
   ipcMain.handle('credentials:status', () => credentials.status());
   ipcMain.handle('credentials:save', (_e, name, value) => {
-    try { return ok({ status: credentials.save(name, value) }); } catch (e) { return fail(e); }
+    try { if (!credentials.isPublicName(name)) throw new Error('Unknown credential type.'); return ok({ status: credentials.save(name, value) }); } catch (e) { return fail(e); }
   });
   ipcMain.handle('credentials:remove', (_e, name) => {
-    try { return ok({ status: credentials.remove(name) }); } catch (e) { return fail(e); }
+    try { if (!credentials.isPublicName(name)) throw new Error('Unknown credential type.'); return ok({ status: credentials.remove(name) }); } catch (e) { return fail(e); }
   });
   ipcMain.handle('credentials:reveal', async (_e, name) => {
     if (revealPending) return fail(new Error('A Windows Hello verification is already in progress.'));
     revealPending = true;
     try {
+      if (!credentials.isPublicName(name)) throw new Error('Unknown credential type.');
       if (!credentials.status()[name]) throw new Error('No saved credential is available to reveal.');
       const verification = await windowsHello.verify();
       if (!verification.ok) throw new Error(`Windows Hello did not verify your identity: ${verification.message}`);
@@ -250,6 +328,8 @@ function registerIpc() {
 
   // --- History ---
   ipcMain.handle('history:list', () => store.listDeployments());
+  ipcMain.handle('history:query', (_e, options) => store.queryDeployments(options));
+  ipcMain.handle('history:matchingIds', (_e, filters) => store.matchingDeploymentIds(filters));
   ipcMain.handle('history:get', (_e, id) => store.getDeployment(id));
   ipcMain.handle('history:delete', (_e, ids) => store.deleteDeployments(Array.isArray(ids) ? ids : []));
   ipcMain.handle('history:export', async (_e, ids, format) => {
@@ -292,68 +372,85 @@ function registerIpc() {
   ipcMain.handle('artifacts:dir', () => store.artifactsDir());
 
   // === Export from source (optional version bump) + inspect + store ===
-  ipcMain.handle('deploy:export', async (_e, params) => {
+  ipcMain.handle('deploy:export', deploymentHandler(async (_e, params) => {
     if (agentBusy) return fail(new Error('A deployment agent is already running.'));
     const { sourceEnvUrl, sourceEnvName, targetEnvName, account, solutionId, solutionName, newVersion, exportManaged } = params;
+    const current = await auth.status().catch(() => ({}));
+    const snapshot = { runId: crypto.randomUUID(), accountId: current.account?.homeAccountId,
+      account: current.account?.username, sourceEnv: sourceEnvName, targetEnv: targetEnvName,
+      solutionUniqueName: solutionName, version: newVersion, exportManaged, phase: 'export' };
+    teamsNotifications.start(snapshot);
+    const report = (...args) => { stage(...args); teamsNotifications.update(snapshot.runId, ...args); };
     try {
       if (newVersion && solutionId) {
-        stage('version', 'running', null, `Setting version ${newVersion}…`);
+        report('version', 'running', null, `Setting version ${newVersion}…`);
         try {
           await dataverse.setSolutionVersion(sourceEnvUrl, solutionId, newVersion);
-          stage('version', 'done', 100, `Version set to ${newVersion}.`);
+          report('version', 'done', 100, `Version set to ${newVersion}.`);
         } catch (e) {
-          stage('version', 'error', null, 'Version update warning: ' + e.message);
+          report('version', 'error', null, 'Version update warning: ' + e.message);
         }
       }
       const ts = new Date().toISOString().replace(/[:.]/g, '-');
       const outFile = path.join(store.artifactsDir(), `${sanitize(solutionName)}_${sanitize(newVersion || 'export')}_${ts}${exportManaged ? '_managed' : ''}.zip`);
 
-      stage('export', 'running', null, `Exporting ${solutionName} from ${sourceEnvName}…`);
+      report('export', 'running', null, `Exporting ${solutionName} from ${sourceEnvName}…`);
       await dataverse.exportToFile(sourceEnvUrl, solutionName, exportManaged, outFile);
-      stage('export', 'done', 100, 'Exported.');
+      report('export', 'done', 100, 'Exported.');
 
-      stage('analyze', 'running', null, 'Inspecting package…');
+      report('analyze', 'running', null, 'Inspecting package…');
       const inspection = zip.inspect(outFile);
-      stage('analyze', 'done', 100, `Found ${inspection.dependencies?.length || 0} dependencies.`);
+      report('analyze', 'done', 100, `Found ${inspection.dependencies?.length || 0} dependencies.`);
 
       let stored = {};
       try {
         stored = await storeArtifact({
           artifact: outFile, account, sourceEnv: sourceEnvName, targetEnv: targetEnvName,
-          solution: solutionName, version: newVersion, managed: exportManaged
+          solution: solutionName, version: newVersion, managed: exportManaged, report
         });
       } catch (e) {
         stored = { warning: 'Export could not be saved to the configured storage: ' + e.message };
-        stage('store', 'error', null, stored.warning);
+        report('store', 'error', null, stored.warning);
       }
-      return ok({ artifact: outFile, inspection, stored });
+      const teams = teamsNotifications.finish(snapshot.runId, { ok: true });
+      return ok({ artifact: outFile, inspection, stored, teams });
     } catch (e) {
-      stage('export', 'error', null, e.message);
+      report('export', 'error', null, e.message);
       notifyDeployment('Export stopped', e.message);
-      return fail(e);
+      return { ...fail(e), teams: teamsNotifications.finish(snapshot.runId, { ok: false, error: e.message }) };
     }
-  });
+  }));
 
   // === Bounded agent deployment from a source solution ===
-  ipcMain.handle('deploy:agent', async (_e, params) => {
+  ipcMain.handle('deploy:agent', deploymentHandler(async (_e, params) => {
     if (agentBusy) return fail(new Error('A deployment agent is already running.'));
     agentBusy = true;
+    let snapshot;
+    const report = (...args) => { stage(...args); if (snapshot) teamsNotifications.update(snapshot.runId, ...args); };
     try {
-      const snapshot = structuredClone(params);
+      snapshot = structuredClone(params);
+      snapshot.runId = crypto.randomUUID();
       const current = await auth.status();
       if (!current.signedIn || current.account.homeAccountId !== snapshot.accountId) {
         throw new Error('The active Microsoft account changed. Review the deployment details and try again.');
       }
       snapshot.account = current.account.username;
+      snapshot.deploymentMethod = 'agent';
+      snapshot.deploymentAutomation = automationSettings(store.getSettings().deploymentAutomation);
+      snapshot.repairTransport = snapshot.deploymentAutomation.repairTransport;
+      snapshot.teamsNotifications = store.getSettings().teamsNotifications;
+      teamsNotifications.start(snapshot, snapshot.teamsNotifications);
       const checkAccount = async () => {
         const latest = await auth.status();
         if (latest.account?.homeAccountId !== snapshot.accountId) throw new Error('The active Microsoft account changed during deployment.');
       };
-      stage('agent', 'running', null, 'Agent deployment started.');
+      report('agent', 'running', null, 'Agent deployment started.');
       const result = await deploymentAgent.runAgentDeployment(snapshot, {
-        dataverse, mcp: useDataverseMcp ? dataverseMcp : null, zip,
-        artifactsDir: store.artifactsDir, storeArtifact, report: stage, checkAccount
+        dataverse, mcp: null, zip,
+        artifactsDir: store.artifactsDir, storeArtifact: args => storeArtifact({ ...args, report }), report, checkAccount,
+        requestApproval: deploymentAutomation.requestApproval
       });
+      const teams = teamsNotifications.finish(snapshot.runId, result);
       let warning = result.warning || '';
       let saved = null;
       try {
@@ -373,56 +470,82 @@ function registerIpc() {
         try { saved = store.updateDeployment(saved.id, { warning }); }
         catch { /* The import outcome is still authoritative if history updating fails. */ }
       }
-      stage('agent', result.ok ? 'done' : 'error', result.ok ? 100 : null, result.ok ? (saved ? 'Deployment recorded in history.' : 'Import finished; history could not be saved.') : result.error);
+      report('agent', result.ok ? 'done' : 'error', result.ok ? 100 : null, result.ok ? (saved ? 'Deployment recorded in history.' : 'Import finished; history could not be saved.') : result.error);
       notifyDeployment(result.ok ? (warning ? 'Deployment needs attention' : 'Deployment complete') : 'Deployment stopped',
         result.ok
           ? (warning || `Imported ${snapshot.solutionUniqueName} v${snapshot.version} to ${snapshot.targetEnv}.`)
           : (result.error || 'Agent deployment stopped before import could finish.'));
-      return { ...result, warning, record: saved };
+      const reporting = await deploymentAutomation.recordOutcome(snapshot, { ...result, warning })
+        .catch(() => ({ ok: false, error: 'Deployment reporting could not be queued. Check reporting settings.' }));
+      if (saved) { try { saved = store.updateDeployment(saved.id, { teamsNotifications: snapshot.teamsNotifications, teams }); } catch {} }
+      return { ...result, warning, record: saved, runId: snapshot.runId, reporting, teams };
     } catch (error) {
-      stage('agent', 'error', null, error.message);
+      report('agent', 'error', null, error.message);
       notifyDeployment('Deployment stopped', error.message);
-      return fail(error);
+      const teams = snapshot ? teamsNotifications.finish(snapshot.runId, { ok: false, error: error.message }) : null;
+      if (snapshot) await deploymentAutomation.recordOutcome(snapshot, { ok: false, error: error.message }).catch(() => {});
+      return { ...fail(error), teams };
     } finally { agentBusy = false; }
-  });
+  }));
 
   // === Import into target (async, real progress) + optional publish ===
-  ipcMain.handle('deploy:import', async (_e, params) => {
+  ipcMain.handle('deploy:import', deploymentHandler(async (_e, params) => {
     if (agentBusy) return fail(new Error('A deployment agent is already running.'));
     const { targetEnvUrl, targetEnvName, solutionName, artifact, overwrite, publishChanges, exportManaged } = params;
+    const current = await auth.status().catch(() => ({}));
+    const snapshot = { runId: crypto.randomUUID(), accountId: current.account?.homeAccountId,
+      account: current.account?.username, sourceUrl: params.sourceEnvUrl || '', sourceEnv: params.sourceEnvName || 'Package file',
+      targetUrl: targetEnvUrl, targetEnv: targetEnvName, solutionUniqueName: params.solutionUniqueName || solutionName,
+      solution: solutionName, version: params.version, exportManaged, overwrite, publishChanges,
+      deploymentMethod: 'import', description: params.description, notes: params.notes };
+    snapshot.deploymentAutomation = automationSettings(store.getSettings().deploymentAutomation);
+    const teamsChoice = store.getSettings().teamsNotifications;
+    teamsNotifications.start(snapshot, teamsChoice);
+    const report = (...args) => { stage(...args); teamsNotifications.update(snapshot.runId, ...args); };
     try {
-      stage('import', 'running', 1, 'Starting import…');
+      report('import', 'running', 1, 'Starting import…');
       const r = await dataverse.importSolutionFromFile(
         targetEnvUrl, artifact, { overwrite, publishWorkflows: true },
-        (pct, msg) => stage('import', 'running', pct, msg)
+        (pct, msg) => report('import', 'running', pct, msg)
       );
       if (!r.ok) {
-        stage('import', 'error', null, r.error);
+        report('import', 'error', null, r.error);
         notifyDeployment('Import stopped', [solutionName, 'could not be imported to', targetEnvName, r.error].filter(Boolean).join(' '));
+        r.runId = snapshot.runId;
+        r.teams = teamsNotifications.finish(snapshot.runId, r);
+        r.teamsNotifications = teamsChoice;
+        r.reporting = await deploymentAutomation.recordOutcome(snapshot, r)
+          .catch(() => ({ ok: false, error: 'Deployment reporting could not be queued. Check reporting settings.' }));
         return r;
       }
-      stage('import', 'done', 100, 'Imported.');
+      report('import', 'done', 100, 'Imported.');
 
       let publishWarning = '';
       if (publishChanges && !exportManaged) {
-        stage('publish', 'running', null, 'Publishing customizations…');
+        report('publish', 'running', null, 'Publishing customizations…');
         try {
           await dataverse.publishAll(targetEnvUrl);
-          stage('publish', 'done', 100, 'Published.');
+          report('publish', 'done', 100, 'Published.');
         } catch (e) {
-          stage('publish', 'error', null, 'Publish warning: ' + e.message);
+          report('publish', 'error', null, 'Publish warning: ' + e.message);
           publishWarning = 'Import succeeded, but publishing failed: ' + e.message;
         }
       }
       notifyDeployment(publishWarning ? 'Deployment needs attention' : 'Deployment complete',
         publishWarning || `Imported ${solutionName || 'solution'} to ${targetEnvName || targetEnvUrl}.`);
-      return { ...r, ...(publishWarning ? { warning: publishWarning } : {}) };
+      const teams = teamsNotifications.finish(snapshot.runId, { ...r, warning: publishWarning });
+      const reporting = await deploymentAutomation.recordOutcome(snapshot, { ...r, warning: publishWarning })
+        .catch(() => ({ ok: false, error: 'Deployment reporting could not be queued. Check reporting settings.' }));
+      return { ...r, ...(publishWarning ? { warning: publishWarning } : {}), runId: snapshot.runId, reporting,
+        teams, teamsNotifications: teamsChoice };
     } catch (e) {
-      stage('import', 'error', null, e.message);
+      report('import', 'error', null, e.message);
       notifyDeployment('Import stopped', e.message);
-      return fail(e);
+      const teams = teamsNotifications.finish(snapshot.runId, { ok: false, error: e.message });
+      await deploymentAutomation.recordOutcome(snapshot, { ok: false, error: e.message }).catch(() => {});
+      return { ...fail(e), teams, teamsNotifications: teamsChoice };
     }
-  });
+  }));
 
   // === Persist a deployment record + write notes file ===
   ipcMain.handle('deploy:record', async (_e, record) => {

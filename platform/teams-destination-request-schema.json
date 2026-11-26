@@ -1,0 +1,187 @@
+{
+  "type": "object",
+  "required": [
+    "type",
+    "helper",
+    "attachments"
+  ],
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": [
+        "message"
+      ]
+    },
+    "helper": {
+      "type": "object",
+      "required": [
+        "version",
+        "recipients",
+        "runId",
+        "event",
+        "observedAt"
+      ],
+      "properties": {
+        "version": {
+          "type": "integer",
+          "enum": [
+            1,
+            2
+          ]
+        },
+        "recipients": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 20,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 254
+          }
+        },
+        "runId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "event": {
+          "type": "string",
+          "enum": [
+            "started",
+            "progress",
+            "success",
+            "failure"
+          ]
+        },
+        "observedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "groupChats": {
+          "type": "array",
+          "maxItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 14,
+            "maxLength": 413
+          }
+        },
+        "channels": {
+          "type": "array",
+          "maxItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "required": [
+              "teamId",
+              "channelId"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "teamId": {
+                "type": "string",
+                "minLength": 36,
+                "maxLength": 36
+              },
+              "channelId": {
+                "type": "string",
+                "minLength": 17,
+                "maxLength": 416
+              }
+            }
+          }
+        }
+      }
+    },
+    "attachments": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "contentType",
+          "content"
+        ],
+        "properties": {
+          "contentType": {
+            "type": "string",
+            "enum": [
+              "application/vnd.microsoft.card.adaptive"
+            ]
+          },
+          "contentUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "content": {
+            "type": "object",
+            "required": [
+              "type",
+              "version",
+              "body"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "AdaptiveCard"
+                ]
+              },
+              "version": {
+                "type": "string",
+                "enum": [
+                  "1.2"
+                ]
+              },
+              "body": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 20,
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "type",
+                    "text"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "TextBlock"
+                      ]
+                    },
+                    "text": {
+                      "type": "string",
+                      "maxLength": 2000
+                    },
+                    "wrap": {
+                      "type": "boolean"
+                    },
+                    "weight": {
+                      "type": "string",
+                      "enum": [
+                        "Bolder"
+                      ]
+                    },
+                    "size": {
+                      "type": "string",
+                      "enum": [
+                        "Medium"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

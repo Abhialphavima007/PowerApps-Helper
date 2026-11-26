@@ -13,9 +13,10 @@ const STAGE_LABELS = {
   version: 'Set version', export: 'Export from source', analyze: 'Analyze package',
   store: 'Store artifact', agent: 'Deployment agent', import: 'Import to target', resolve: 'Find source components',
   repair: 'Add source dependencies', publishsource: 'Publish source customizations',
+  approval: 'Wait for dependency approval',
   reexport: 'Re-export source', publish: 'Publish target customizations'
 };
-const STAGE_ORDER = ['version', 'export', 'analyze', 'store', 'agent', 'import', 'resolve', 'repair', 'publishsource', 'reexport', 'publish'];
+const STAGE_ORDER = ['version', 'export', 'analyze', 'store', 'agent', 'import', 'resolve', 'approval', 'repair', 'publishsource', 'reexport', 'publish'];
 
 function bumpVersion(v) {
   if (!v) return '1.0.0.1';
@@ -292,6 +293,9 @@ export default function DeployView({ account, envs, envLoading, envError, refres
       const r = await api.deploy.importSolution({
         targetEnvUrl: targetUrl, artifact: analysis.artifact,
         targetEnvName: envName(envs, targetUrl),
+        sourceEnvUrl: mode === 'source' ? sourceUrl : '', sourceEnvName: mode === 'source' ? envName(envs, sourceUrl) : 'Package file',
+        solutionUniqueName: mode === 'source' ? solutionName : analysis.inspection?.uniqueName,
+        version: mode === 'source' ? version : analysis.inspection?.version, description, notes: effectiveNotes,
         solutionName: mode === 'file' ? (analysis?.inspection?.uniqueName || filePath.split(/[\\/]/).pop()) : (selectedSolution?.friendlyName || solutionName),
         overwrite: forceOverwrite, publishChanges, exportManaged: managed
       });
@@ -306,7 +310,8 @@ export default function DeployView({ account, envs, envLoading, envError, refres
         description, workItems, workItemDetails, workItemSummary: workSummary, exportManaged: managed, mode,
         artifact: analysis.artifact, stored: analysis.stored || {},
         dependencies: analysis.inspection?.dependencies || [], summary: analysis.inspection?.summary || {},
-        notes: effectiveNotes, status: r.ok ? 'success' : 'failed', warning: [r.warning, analysis.stored?.warning].filter(Boolean).join(' ') || null, error: r.ok ? null : r.error
+        notes: effectiveNotes, status: r.ok ? 'success' : 'failed', warning: [r.warning, analysis.stored?.warning].filter(Boolean).join(' ') || null, error: r.ok ? null : r.error,
+        runId: r.runId, reporting: r.reporting, teamsNotifications: r.teamsNotifications, teams: r.teams
       });
       setRecord(rec);
       if (gitCommit) {
@@ -576,7 +581,7 @@ export default function DeployView({ account, envs, envLoading, envError, refres
               {analysis && <button className="btn" disabled={busy} onClick={runDeploy}>{busy ? <span className="spin" /> : `🚀 Import ${managed ? 'managed' : 'unmanaged'} to target`}</button>}
             </div>
           )}
-          {mode === 'source' && !importResult && <p className="muted agent-help">The agent imports, reads failed target-import dependencies, adds identifiable components to the source solution through Microsoft Dataverse MCP when supported (or the authenticated Dataverse API fallback), publishes the source customizations once, then re-exports and retries up to twice. Package dependency warnings alone do not trigger repairs. Your route, work items, description and notes stay selected.</p>}
+          {mode === 'source' && !importResult && <p className="muted agent-help">The agent imports and reads missing dependencies from a failed target import. It requests approval for the exact source additions, then uses the repair connection selected in Settings, publishes, re-exports and retries for up to five repair cycles. Enable and configure dependency approval in Settings before using repairs. Package dependency warnings alone do not trigger repairs. Your route, work items, description and notes stay selected.</p>}
           {(busy || activeStages.length > 0) && <ProgressPanel stages={activeStages} progress={progress} />}
           {importResult && (
             <div className={'alert ' + (importResult.ok ? 'info' : 'err')} style={{ marginTop: 14 }}>

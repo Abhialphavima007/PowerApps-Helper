@@ -5,6 +5,7 @@ const path = require('path');
 const { safeStorage } = require('electron');
 
 const NAMES = ['openai', 'claude', 'grok', 'gemini', 'foundry', 'azureDevOps'];
+const PRIVATE_NAMES = ['teamsCodex', 'teamsWorkflow'];
 let file;
 
 function init(userDataPath) {
@@ -31,7 +32,7 @@ function write(data) {
 }
 
 function assertName(name) {
-  if (!NAMES.includes(name)) throw new Error('Unknown credential type.');
+  if (!NAMES.includes(name) && !PRIVATE_NAMES.includes(name)) throw new Error('Unknown credential type.');
 }
 
 function save(name, value) {
@@ -67,4 +68,4 @@ function status() {
   return Object.fromEntries(NAMES.map((name) => [name, !!data[name]]));
 }
 
-module.exports = { init, save, remove, get, status };
+module.exports = { init, save, remove, get, status, isPublicName: name => NAMES.includes(name) };

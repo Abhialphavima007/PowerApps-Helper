@@ -31,10 +31,12 @@ const GRAPH = 'https://graph.microsoft.com';
 
 let dvPca; // Dataverse client
 let graphPca; // Graph client
+let teamsPca; // Same Graph public client; Teams uses a separate encrypted-only cache.
 let mcpPca; // Environment-hosted Dataverse MCP client
 let cryptoProvider;
 let dvCacheFile;
 let graphCacheFile;
+let teamsCacheFile;
 let mcpCacheFile;
 let activeFile;
 let activeHomeAccountId = null;
@@ -68,11 +70,31 @@ function cachePlugin(file) {
   };
 }
 
+function assertTeamsEncryption() {
+  if (!safeStorage.isEncryptionAvailable() || safeStorage.getSelectedStorageBackend?.() === 'basic_text') {
+    throw new Error('Teams requires secure OS credential storage. Unlock your keychain and reconnect Teams.');
+  }
+}
+function teamsCachePlugin(file) {
+  return {
+    beforeCacheAccess: async ctx => {
+      assertTeamsEncryption();
+      if (fs.existsSync(file)) ctx.tokenCache.deserialize(safeStorage.decryptString(fs.readFileSync(file)));
+    },
+    afterCacheAccess: async ctx => {
+      if (!ctx.cacheHasChanged) return;
+      assertTeamsEncryption();
+      fs.writeFileSync(file, safeStorage.encryptString(ctx.tokenCache.serialize()), { mode: 0o600 });
+    }
+  };
+}
+
 function init(userDataPath, onProgress = () => {}) {
   const dir = path.join(userDataPath, 'powerapps-helper');
   fs.mkdirSync(dir, { recursive: true });
   dvCacheFile = path.join(dir, 'msal-cache.bin');
   graphCacheFile = path.join(dir, 'graph-cache.bin');
+  teamsCacheFile = path.join(dir, 'teams-cache.bin');
   mcpCacheFile = path.join(dir, 'mcp-cache.bin');
   activeFile = path.join(dir, 'active-account.json');
   reportProgress = onProgress;
@@ -85,6 +107,7 @@ function init(userDataPath, onProgress = () => {}) {
   } catch {}
   dvPca = new PublicClientApplication({ auth: { clientId: DV_CLIENT_ID, authority: AUTHORITY }, cache: { cachePlugin: cachePlugin(dvCacheFile) } });
   graphPca = new PublicClientApplication({ auth: { clientId: GRAPH_CLIENT_ID, authority: AUTHORITY }, cache: { cachePlugin: cachePlugin(graphCacheFile) } });
+  teamsPca = new PublicClientApplication({ auth: { clientId: GRAPH_CLIENT_ID, authority: AUTHORITY }, cache: { cachePlugin: teamsCachePlugin(teamsCacheFile) } });
   mcpPca = new PublicClientApplication({ auth: { clientId: MCP_CLIENT_ID, authority: AUTHORITY }, cache: { cachePlugin: cachePlugin(mcpCacheFile) } });
   cryptoProvider = new CryptoProvider();
 }
@@ -305,6 +328,9 @@ async function signOut(homeAccountId) {
   const cache = dvPca.getTokenCache();
   const accts = await cache.getAllAccounts();
   for (const a of accts) if (!homeAccountId || a.homeAccountId === homeAccountId) await cache.removeAccount(a);
+  // Clear all local Teams tokens without requiring an unlocked keychain at sign-out.
+  if (fs.existsSync(teamsCacheFile)) fs.unlinkSync(teamsCacheFile);
+  teamsPca = new PublicClientApplication({ auth: { clientId: GRAPH_CLIENT_ID, authority: AUTHORITY }, cache: { cachePlugin: teamsCachePlugin(teamsCacheFile) } });
   try {
     const mcpCache = mcpPca.getTokenCache();
     for (const mcpAccount of await mcpCache.getAllAccounts()) {
@@ -348,6 +374,19 @@ async function getToken(resourceUrl) {
   return r.accessToken;
 }
 
+// Background deployment reporting must not prompt for sign-in or switch accounts.
+async function getTokenSilent(resourceUrl, expectedAccountId) {
+  const account = await getActiveAccount();
+  if (!account || (expectedAccountId && account.homeAccountId !== expectedAccountId)) {
+    throw new Error('Sign in with the deployment account to report notifications.');
+  }
+  try {
+    return (await dvPca.acquireTokenSilent({ account, scopes: scopeFor(resourceUrl) })).accessToken;
+  } catch {
+    throw new Error('Sign in to the setup environment, then retry pending notifications.');
+  }
+}
+
 // Optional tenant metadata lookup must never start an interactive sign-in.
 async function getTenantTokenSilent(expectedAccount) {
   const account = (await allAccounts()).find((item) =>
@@ -370,7 +409,9 @@ async function getMcpToken(resourceUrl) {
   const active = await getActiveAccount();
   if (!active) throw new Error('Sign in to a Microsoft account before using the deployment agent.');
   const scopes = scopeFor(resourceUrl);
-  const matches = (await mcpPca.getTokenCache().getAllAccounts()).filter(
+  const mcpCache = mcpPca.getTokenCache();
+  const cachedAccounts = await mcpCache.getAllAccounts();
+  const matches = cachedAccounts.filter(
     (item) => item.username?.toLowerCase() === active.username?.toLowerCase()
   );
   for (const account of matches) {
@@ -378,6 +419,11 @@ async function getMcpToken(resourceUrl) {
   }
   const result = await login(mcpPca, scopes, active.username);
   if (result.account?.username?.toLowerCase() !== active.username?.toLowerCase()) {
+    // Remove only an account introduced by this rejected sign-in. Keep any
+    // existing account and the desktop's active deployment identity intact.
+    if (result.account && !cachedAccounts.some(account => account.homeAccountId === result.account.homeAccountId)) {
+      await mcpCache.removeAccount(result.account);
+    }
     throw new Error('The Dataverse MCP sign-in used a different account. Retry with the active PowerApps Helper account.');
   }
   return result.accessToken;
@@ -404,6 +450,32 @@ async function getGraphToken(scopes) {
   return r.accessToken;
 }
 
+// Teams consent is explicit; background updates never prompt or use another tenant.
+async function getTeamsGraphToken(scopes, expectedAccountId, interactive = false) {
+  assertTeamsEncryption();
+  const active = await getActiveAccount();
+  if (!active || active.homeAccountId !== expectedAccountId) {
+    throw new Error('Use the deployment Microsoft account to connect Teams.');
+  }
+  const matches = (await teamsPca.getTokenCache().getAllAccounts()).filter(account =>
+    account.homeAccountId === expectedAccountId && account.tenantId === active.tenantId &&
+    account.username?.toLowerCase() === active.username?.toLowerCase());
+  for (const account of matches) {
+    let result;
+    try { result = await teamsPca.acquireTokenSilent({ account, scopes }); } catch { continue; }
+    if ((await getActiveAccount())?.homeAccountId !== expectedAccountId) throw new Error('The active Microsoft account changed. Reconnect Teams.');
+    return result.accessToken;
+  }
+  if (!interactive) throw new Error('Connect Teams in Settings with the deployment account before sending updates.');
+  const result = await login(teamsPca, scopes, active.username);
+  const latest = await getActiveAccount();
+  if (latest?.homeAccountId !== expectedAccountId || result.account?.homeAccountId !== expectedAccountId || result.account?.tenantId !== active.tenantId ||
+      result.account?.username?.toLowerCase() !== active.username?.toLowerCase()) {
+    throw new Error('Teams sign-in used a different account or tenant. Connect again with the deployment account.');
+  }
+  return result.accessToken;
+}
+
 module.exports = {
   init,
   cancelSignIn,
@@ -414,9 +486,11 @@ module.exports = {
   signOut,
   status,
   getToken,
+  getTokenSilent,
   getTenantTokenSilent,
   getMcpToken,
   getGraphToken,
+  getTeamsGraphToken,
   GLOBAL_DISCO,
   GRAPH
 };

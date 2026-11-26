@@ -319,6 +319,11 @@ tr:hover td { background: var(--panel-2); }
 .history-table-wrap { padding: 0; overflow-x: auto; }
 .history-table-wrap table { min-width: 760px; }
 .history-row-actions { white-space: nowrap; }
+.history-filter-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
+.history-pagination { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 18px 0; }
+.history-pagination label { margin: 0; }
+.history-pagination select { width: auto; }
+.history-pagination > span { flex: 1; min-width: 200px; }
 .history-dialog { width: min(820px, calc(100vw - 36px)); max-height: calc(100vh - 36px); padding: 0; border: 1px solid var(--border); border-radius: 14px; background: var(--panel); color: var(--text); box-shadow: var(--dialog-shadow); }
 .history-dialog::backdrop { background: var(--backdrop); }
 .history-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 20px 24px; border-bottom: 1px solid var(--border); }
@@ -604,4 +609,99 @@ tr:hover td { background: var(--panel-2); }
   :root, :root[data-theme] { --border: var(--strong-border); }
   :root :is(.sidebar, .card, .history-stats > div, .account-card, .environment-card, .gate-card, .step) { border-color: var(--border); }
   :root :is(select, input, textarea, .btn.secondary, .btn.ghost) { background: var(--panel); border-color: var(--strong-border); }
+}
+
+/* Settings: category navigation and compact, labeled configuration groups. */
+.settings-page-header { margin-bottom: 28px; }
+.settings-page-header .sub { margin-bottom: 0; }
+.settings-layout { display: grid; grid-template-columns: 218px minmax(0, 1fr); gap: 28px; align-items: start; }
+.settings-nav { position: sticky; top: 0; padding: 8px 0; }
+.settings-nav-label { margin: 0 0 14px 14px; color: var(--muted); font-size: 10px; font-weight: 650; letter-spacing: .12em; }
+.settings-nav button {
+  display: flex; align-items: center; gap: 12px; width: 100%; padding: 13px 14px; margin-bottom: 4px;
+  border: 1px solid transparent; border-radius: 12px; background: transparent;
+  color: var(--muted); text-align: left; cursor: pointer; font: inherit;
+}
+.settings-nav button:hover { background: var(--nav-hover); color: var(--text); }
+.settings-nav button.active { background: var(--radio-selected); border-color: var(--step-active-border); color: var(--accent); }
+.settings-nav svg { width: 20px; height: 20px; flex: none; }
+.settings-nav button span { display: grid; gap: 4px; }
+.settings-nav button b { font-size: 13px; font-weight: 600; }
+.settings-nav button small { color: var(--muted); font-size: 11px; }
+.settings-nav-note { margin: 22px 14px 0; padding-top: 18px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; line-height: 1.6; }
+.settings-content { min-width: 0; }
+.settings-page [hidden] { display: none !important; }
+.settings-page h2 { margin: 0 0 8px; font-size: 21px; font-weight: 650; letter-spacing: -.4px; }
+.settings-page .muted { font-size: 12px; line-height: 1.6; }
+.settings-page code { overflow-wrap: anywhere; }
+.settings-page .card { margin-bottom: 0; }
+.settings-page .alert { margin-top: 16px; overflow-wrap: anywhere; }
+.settings-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+.settings-card-header .muted { margin: 0; }
+.settings-card-header .pill { flex: none; margin-top: 3px; }
+.settings-info-strip {
+  display: flex; align-items: center; gap: 12px; padding: 13px 16px; margin-bottom: 24px;
+  border: 1px solid var(--info-border); border-radius: 12px; background: var(--info-bg); color: var(--info-text);
+  font-size: 12px; line-height: 1.6;
+}
+.settings-info-strip svg { width: 22px; height: 22px; flex: none; }
+.settings-group { margin: 22px 0; }
+:root .settings-group h3 { margin: 0 0 16px; font-size: 14px; font-weight: 650; }
+.settings-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.settings-page label:not(.check):not(.radio) { margin-bottom: 8px; }
+.settings-page textarea { min-height: 80px; resize: vertical; }
+.settings-connection-status { padding: 11px 14px; border-radius: 10px; background: var(--panel-2); font-size: 12px; line-height: 1.6; }
+.settings-sender-summary { margin: 16px 0; padding: 14px 16px; border: 1px solid var(--step-active-border); border-radius: 12px; background: var(--radio-selected); font-size: 13px; line-height: 1.6; }
+.settings-sender-summary b { color: var(--text); font-weight: 600; }
+.settings-sender-summary p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+.settings-fields { min-width: 0; margin: 0; padding: 0; border: 0; }
+.settings-group-title { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.settings-page .check { display: flex; align-items: flex-start; gap: 11px; margin: 0; cursor: pointer; font-size: 13px; }
+.settings-page .check input[type='checkbox'] { width: 17px; height: 17px; flex: 0 0 17px; margin: 2px 0 0; padding: 0; }
+.settings-page .check span { display: grid; gap: 5px; min-width: 0; }
+.settings-page .check b { color: var(--text); font-weight: 600; line-height: 1.5; }
+.settings-page .check small { color: var(--muted); font-size: 12px; font-weight: 400; line-height: 1.5; }
+.settings-page .settings-toggle { padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--radio-bg); }
+.settings-page .settings-toggle:has(input:checked) { border-color: var(--step-active-border); background: var(--radio-selected); }
+.settings-page .check:has(input:disabled) { cursor: not-allowed; }
+.settings-interval-row { display: grid; grid-template-columns: minmax(170px, 220px) minmax(0, 1fr); gap: 22px; align-items: center; margin-bottom: 18px; }
+.settings-interval-row .muted { margin: 20px 0 0; }
+.settings-event-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.settings-event-grid .check { padding: 13px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--radio-bg); }
+.settings-event-grid .check:has(input:checked) { border-color: var(--step-active-border); }
+.settings-page .settings-save-actions { margin: 24px 0 20px; padding-top: 22px; border-top: 1px solid var(--border); }
+.settings-details { border-top: 1px solid var(--border); padding: 14px 0; font-size: 12px; line-height: 1.6; }
+.settings-details summary { cursor: pointer; color: var(--text); font-weight: 600; border-radius: 4px; }
+.settings-details summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.settings-details[open] summary { margin-bottom: 14px; }
+.settings-details ol { padding-left: 22px; }
+.settings-details li + li { margin-top: 7px; }
+.settings-details .toolbar { margin-bottom: 0; }
+.settings-details .btn { font-size: 12px; }
+.settings-footer-note { margin: 8px 0 0; }
+.settings-profile-field { max-width: 340px; margin-top: 18px; }
+.settings-page .credential-row { padding: 20px 0; }
+.settings-page .credential-controls { flex-wrap: wrap; }
+.settings-page .credential-controls input { flex-basis: 240px; }
+.settings-page .storage-client { margin: 24px 0; }
+.settings-page .appearance-options legend { font-size: 21px; font-weight: 650; letter-spacing: -.4px; }
+@media (max-width: 1050px) {
+  .settings-layout { grid-template-columns: 190px minmax(0, 1fr); gap: 20px; }
+  .settings-form-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 800px) {
+  .settings-layout { grid-template-columns: 1fr; gap: 20px; }
+  .settings-nav { position: static; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; padding: 0; }
+  .settings-nav-label, .settings-nav-note, .settings-nav button small { display: none; }
+  .settings-nav button { margin: 0; padding: 12px 10px; gap: 8px; background: var(--radio-bg); border-color: var(--border); }
+  .settings-nav button b { font-size: 12px; }
+  .settings-page-header { margin-bottom: 20px; }
+}
+@media (max-width: 560px) {
+  .settings-nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .settings-card-header { flex-wrap: wrap; }
+  .settings-interval-row, .settings-event-grid { grid-template-columns: 1fr; gap: 10px; }
+  .settings-interval-row .muted { margin: 0; }
+  .settings-save-actions .btn { width: 100%; }
+  .settings-page .radio { min-width: 0; flex-basis: 100%; }
 }

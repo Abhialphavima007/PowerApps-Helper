@@ -4,7 +4,7 @@ A cross-platform (Windows, macOS, and Linux) desktop app for deploying Microsoft
 
 [Download the latest GitHub release](https://github.com/Abhialphavima007/PowerApps-Helper/releases/latest) for Windows, macOS, or Linux.
 
-**Sign in with your Microsoft work account — no Azure app registration required for standard deployment.** The app uses a Microsoft first-party **public client** (the same one Microsoft CLIs use) with browser or device-code sign-in, then talks to the **Dataverse Web API directly** for fast, low-lag cloud calls. Access tokens are cached locally using the existing OS-backed cache when encryption is available, and all deployment history stays on your machine. Tenant consent and access policies apply to either sign-in method. Agent source repair uses the same authenticated Dataverse Web API by default; connecting to MCP is optional.
+**Sign in with your Microsoft work account — no Azure app registration required for standard deployment.** The app uses a Microsoft first-party **public client** (the same one Microsoft CLIs use) with browser or device-code sign-in, then talks to the **Dataverse Web API directly**. Access tokens are cached locally using the existing OS-backed cache when encryption is available, and deployment history stays on your machine. Tenant consent and access policies apply. Approved dependency repairs use the same Dataverse sign-in; a separate Helper Dataverse MCP connection is no longer required.
 
 ---
 
@@ -23,7 +23,10 @@ A cross-platform (Windows, macOS, and Linux) desktop app for deploying Microsoft
 - **Import to the target** with a **live progress bar** (real percentage from the import job), then publish for unmanaged solutions.
 - **Deploy with agent (optional)** — choose **Continue with agent** in Configure to reach deployment before exporting, or export and review first. The agent exports if needed, imports into the target, and reacts only to dependencies reported by a failed target import. It captures the import error and import-job log at failure time, adds identifiable components to the selected unmanaged source solution, publishes source customizations once per repair cycle, re-exports, and retries up to five repair cycles. It retains the selected environments, Azure DevOps stories, description, and notes. Each repair method and import attempt is recorded in history.
 - **Deployment notifications** — the app requests a native notification with the system sound when export or import stops, when agent deployment stops, and when deployment finishes or needs attention. A dismissible in-app alert also appears if native notifications are unsupported or disabled.
-- **Track history** — filter by day, week, month, route, status, or solution; export filtered records as CSV/JSON or delete history records.
+- **Teams deployment connector** — configure up to 20 people, an existing group chat link, a channel link, progress gap (default 5 minutes) and events in **Settings**. Use any combination, including group/channel-only delivery. The recommended workflow sends cards with solution type/version, source → target and current stage; selected completion/failure skip the progress gap. Optional Codex MCP supplies observed progress to Helper's background sender while the app is open. The flow in **Abhinav Research** is on with destination routing, its existing signed trigger and bound Teams connection. Restart Helper, select Helper destinations, keep the saved webhook and paste links copied from Teams. The workflow account needs destination access; private-channel cards are unsupported. Cloud delivery still needs confirmation in run history and Teams. Optional Send as me remains subject to tenant consent. See [workflow setup](platform/teams-workflow.md) and [limits and validation](docs/teams-deployment-connector.md).
+- **Deployment emails and dependency approval** — optional Dataverse reporting defaults to each deployment's target. Source repairs require authenticated approval of the exact component plan. Requests list component names and friendly types before the dependency error. Recipients, wording, mode and timeout are editable in **PowerApps Helper Setup**. Select the verified approval flow Dataverse account by name to fill its trusted ID. The Abhinav Research approval flow and default profile are enabled. See [setup and current state](platform/README.md).
+- **Automatic sleep protection** — Helper keeps the computer awake during export, import and the complete agent run, including approval waits. The display can turn off. Keep Helper running; forced sleep, hibernation, shutdown and network loss cannot be prevented by this feature.
+- **Track history** — filter by day, week, month, route, status, or solution; browse 10, 25 (default), 50 or 100 rows per page. Details load when opened. CSV/JSON export and Delete filtered include every matching page.
 - **Git (optional)** — commit the exported `.zip` + notes to a local repo.
 
 ## Settings & storage
@@ -44,19 +47,27 @@ The manual import path remains available. Package dependency declarations are ad
 
 Each source export, including agent repair re-exports, gets a distinct ZIP file even when the version is unchanged. Deployment notes are also saved beside the final stored ZIP after the deployment is recorded. Staging copies remain in app data for imports and optional Git commits. Storage failures are reported; the staging copy remains available. Packages selected from disk are not moved. History CSV/JSON exports still use the location selected in the save dialog.
 
-### Agent deployment and Microsoft Dataverse MCP
+### Deployment emails and approval setup
 
-Agent dependency repair uses the active account's **Dataverse Web API** token by default. This avoids requesting a separate MCP permission or triggering its admin-approval prompt. Tenant policies may still require approval for Dataverse access.
+In **Settings → Emails & approval**, new settings use **Deployment target (automatic)** for success/failure reports. The target is captured at deployment start; changing the next deployment's target does not move queued reports. PowerApps Helper Setup, a configured profile and the active outcome flow must exist in each reporting target. Progress updates use the separate Teams connector.
 
-To opt into the environment-hosted MCP endpoint at https://{environment}.crm.dynamics.com/api/mcp, set `DATAVERSE_MCP_ENABLED=true`. [Microsoft's direct endpoint setup](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/data-platform-mcp-other-clients#connect-using-the-remote-endpoint) requires a custom Entra app with the Dynamics CRM `mcp.tools` permission. Set `DATAVERSE_MCP_CLIENT_ID` to that tenant-approved public client's ID, enable public-client authentication for device code (and a loopback redirect for browser sign-in), and enable its entry in the source environment's MCP allowed clients. Tenant consent and access policies still apply. The compatibility default is Dataverse CLI client ID `0c412cc3-0dd6-449b-987f-05b053db9457`, documented for the `@microsoft/dataverse` local proxy; Microsoft explicitly requires tenant administrator consent for that client. See [Microsoft's MCP environment setup](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/data-platform-mcp).
+You can select a fixed reporting environment or supply a separate approval setup environment while reports follow the target. Leave the approval URL blank to use the target for both. Older saved destinations are preserved; saved MCP repair settings migrate to the existing API sign-in. Save before checking setup or retrying pending reports. With no saved approval URL, Check saved setup explains the target prerequisites. The local outbox retries while Helper runs using the original Microsoft account. Email delivery failures are separate from import results.
 
-When MCP is enabled, the endpoint's invoke_api tool is used for AddSolutionComponent only when its advertised schema supports the action. If MCP cannot connect before any source change, the agent falls back to the authenticated Dataverse Web API. It does not switch methods after an MCP source action begins, because the outcome might be ambiguous. Tenant policies, permissions, and live MCP tool availability vary; a local build cannot verify them.
+In **PowerApps Helper Setup**, edit recipients, dependency approvers, wording, mode and timeout. Approvers are separate from Teams progress recipients. **First response** lets one selected member approve; a first rejection stops repair. Select **Approval flow account** using the actual Dataverse connection account verified in Power Automate Connections. Helper validates that user and fills the read-only trusted ID; existing IDs are preserved. Teams reminders identify the matching Microsoft approval request. Respond through Microsoft Approvals; chat replies cannot approve changes. New installations require their own connections and enabled profile. See the [generic setup guide](docs/local-handover.md).
+
+When an import reports missing dependencies, the agent sends the exact proposed source additions for approval and waits. Rejection, expiry, missing evidence or changed setup blocks repair. Manual imports remain available. Approved additions are recorded in history; partially completed additions are not automatically rolled back. These flows receive events from the updated PowerApps Helper desktop; other deployment tools need their own event publisher. See [deployment automation details](platform/README.md).
+
+### Agent deployment and optional Codex MCP
+
+Approved source additions, publication, export and import use Helper's existing authenticated Dataverse API. The desktop no longer opens a separate Dataverse MCP connection or exposes a repair-transport selector. Exact-plan approval checks remain required before source changes. Tenant sign-in policies and source customization permissions still apply.
+
+The optional Codex connector for observed deployment updates is independent and remains available. Compatibility modules retain their public MCP contracts for existing callers; they are not initialized by the desktop repair path.
 
 ---
 
 ## Why no app registration / low lag
 
-- **No app registration for standard deployment:** sign-in uses a Microsoft first-party *public* client ID with no secret. MCP is optional and requires tenant consent and source environment setup.
+- **No app registration for standard deployment:** sign-in uses a Microsoft first-party *public* client ID with no secret, subject to tenant policy. Separate Dataverse MCP consent is not required for desktop repairs.
 - **Low lag:** browsing, export and import go straight to the **Dataverse Web API** over HTTPS with a cached bearer token — there is no `pac` subprocess in the hot path. After the first sign-in, tokens refresh silently.
 - **Local where it matters:** the encrypted token cache, exported solution artifacts, deployment notes and history all live in your OS app-data folder.
 
@@ -99,7 +110,7 @@ cp .env.example .env      # add your AI key(s); Microsoft sign-in needs no confi
 
 ---
 
-For agent deployments, set `DATAVERSE_MCP_ENABLED=true` to use MCP. `DATAVERSE_MCP_CLIENT_ID` selects its public client, which must be approved by your tenant and allowed by the source environment. Leave MCP disabled to use the existing Dataverse Web API access for source repair.
+Desktop agent deployments use the existing Dataverse API connection. Legacy Dataverse MCP environment variables do not enable a desktop repair connection.
 
 ## Run (development)
 
@@ -140,7 +151,7 @@ The Electron check uses the built renderer, synthetic accounts, and temporary se
 
 ## Automated releases (GitHub Actions)
 
-The next app version is **0.1.4**. See [release notes and local build evidence](docs/releases/0.1.4.md).
+The current release candidate is **0.1.5**. See [release notes and local build evidence](docs/releases/0.1.5.md). Public publication remains subject to the required independent/security review and release checks.
 
 Every push to `main` starts `.github/workflows/release.yml`. It builds Windows
 installers (`.exe`), macOS disk images (`.dmg`), and Linux AppImages for x64 and
