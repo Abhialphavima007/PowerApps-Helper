@@ -1,0 +1,12 @@
+{
+  "shared_commondataserviceforapps": {
+    "logicalName": "abhi_sharedcommondataserviceforapps_5ab79",
+    "connectorId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps",
+    "connectionId": "shared-commondataser-c535ce09-7847-4833-b52a-fa07df6df3bd"
+  },
+  "shared_approvals": {
+    "logicalName": "abhi_sharedapprovals_3625b",
+    "connectorId": "/providers/Microsoft.PowerApps/apis/shared_approvals",
+    "connectionId": "shared-approvals-231dce9b-cd77-44cf-a5e9-f075f886f0fd"
+  }
+}

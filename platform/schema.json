@@ -1,0 +1,69 @@
+{
+  "solution": "PowerAppsHelper",
+  "publisher": "Abhinav",
+  "prefix": "abhi",
+  "version": "1.1.3.0",
+  "tables": [
+    {
+      "schema": "abhi_DeploymentProfile", "label": "Deployment Notification Profile", "plural": "Deployment Notification Profiles",
+      "description": "Editable notification recipients and dependency approval policy. Restrict writes to setup administrators.",
+      "columns": [
+        ["ProfileKey", "Profile Key", "string", 100],
+        ["Enabled", "Notifications Enabled", "boolean"],
+        ["SuccessRecipients", "Success Email Recipients", "string", 2000],
+        ["FailureRecipients", "Failure Email Recipients", "string", 2000],
+        ["Approvers", "Dependency Approvers", "string", 2000],
+        ["ApprovalMode", "Approval Mode", "picklist", [{"value":100000000,"label":"Every approver must approve"},{"value":100000001,"label":"First response"}]],
+        ["ApprovalTimeoutMinutes", "Approval Timeout (Minutes)", "integer"],
+        ["SubjectPrefix", "Email Subject Prefix", "string", 100],
+        ["SuccessIntro", "Success Email Introduction", "memo", 2000],
+        ["FailureIntro", "Failure Email Introduction", "memo", 2000],
+        ["ApprovalIntro", "Approval Email Introduction", "memo", 2000],
+        ["FlowUserId", "Trusted Approval Flow User ID", "string", 36],
+        ["ApprovalFlowUser", "Approval flow account", "lookup", "systemuser"]
+      ]
+    },
+    {
+      "schema": "abhi_DeploymentEvent", "label": "Deployment Event", "plural": "Deployment Events",
+      "description": "Correlated deployment outcomes and immutable dependency repair proposals from PowerApps Helper. Notification delivery is independent from import outcome.",
+      "columns": [
+        ["RunId", "Deployment Run ID", "string", 36],
+        ["ProfileKey", "Profile Key", "string", 100],
+        ["EventType", "Event Type", "picklist", [{"value":100000000,"label":"Deployment succeeded"},{"value":100000001,"label":"Deployment failed"},{"value":100000002,"label":"Dependency approval requested"}]],
+        ["SolutionName", "Solution Name", "string", 100],
+        ["SolutionVersion", "Solution Version", "string", 50],
+        ["SourceEnvironment", "Source Environment", "string", 200],
+        ["SourceUrl", "Source Environment URL", "string", 500],
+        ["TargetEnvironment", "Target Environment", "string", 200],
+        ["TargetUrl", "Target Environment URL", "string", 500],
+        ["InitiatedBy", "Initiated By", "string", 320],
+        ["CompletedOn", "Event Time (UTC)", "datetime"],
+        ["ImportJobId", "Import Job ID", "string", 36],
+        ["Details", "Deployment Details", "memo", 30000],
+        ["ErrorDetails", "Error Details", "memo", 12000],
+        ["Warning", "Warnings", "memo", 4000],
+        ["RepairCycle", "Repair Cycle", "integer"],
+        ["PlanHash", "Approved Plan SHA-256", "string", 64],
+        ["PlanJson", "Exact Proposed Dependency Plan", "memo", 16000],
+        ["ExpiresOn", "Approval Expires On (UTC)", "datetime"],
+        ["Recipients", "Recipient Snapshot", "string", 2000],
+        ["ApprovalMode", "Approval Mode Snapshot", "picklist", [{"value":100000000,"label":"Every approver must approve"},{"value":100000001,"label":"First response"}]],
+        ["DeliveryStatus", "Notification Delivery", "picklist", [{"value":100000000,"label":"Queued"},{"value":100000001,"label":"Sent"},{"value":100000002,"label":"Failed"},{"value":100000003,"label":"Disabled"}]],
+        ["DeliveryError", "Notification Delivery Error", "memo", 4000]
+      ]
+    },
+    {
+      "schema": "abhi_DeploymentDecision", "label": "Dependency Approval Decision", "plural": "Dependency Approval Decisions",
+      "description": "Approval outcomes written only by the trusted Power Automate connection identity. Deployers require read access only; never grant them create or write access.",
+      "columns": [
+        ["EventId", "Approval Request Event ID", "string", 36],
+        ["RunId", "Deployment Run ID", "string", 36],
+        ["PlanHash", "Approved Plan SHA-256", "string", 64],
+        ["Outcome", "Approval Outcome", "picklist", [{"value":100000000,"label":"Approved"},{"value":100000001,"label":"Rejected"},{"value":100000002,"label":"Expired or failed"}]],
+        ["RespondedOn", "Response Time (UTC)", "datetime"],
+        ["ApprovalId", "Power Automate Approval ID", "string", 100],
+        ["Responses", "Approver Responses and Comments", "memo", 16000]
+      ]
+    }
+  ]
+}

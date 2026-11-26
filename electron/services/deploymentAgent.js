@@ -243,6 +243,7 @@ function makeHistoryRecord(snapshot, result, accountUsername) {
     exportManaged: snapshot.exportManaged,
     mode: 'source',
     deploymentMethod: 'agent',
+    runId: snapshot.runId,
     agent: {
       attempts: result.attempts || [], repairs: result.repairs || [],
       failedDependencies: result.dependencies?.length ? result.dependencies : failedAttempts.flatMap((attempt) => attempt.dependencies || []),
@@ -261,13 +262,14 @@ function makeHistoryRecord(snapshot, result, accountUsername) {
 
 async function runAgentDeployment(snapshot, services) {
   validateSnapshot(snapshot);
-  const { dataverse, mcp, zip, artifactsDir, storeArtifact, report = () => {}, checkAccount = async () => {} } = services;
+  const { dataverse, mcp, zip, artifactsDir, storeArtifact, requestApproval, report = () => {}, checkAccount = async () => {} } = services;
   const attempts = [];
   const repairs = [];
   const attempted = new Set();
   let analysis = snapshot.analysis || null;
   const storageWarnings = analysis?.stored?.warning ? [analysis.stored.warning] : [];
   let lastImport;
+  let repairApproval;
   try {
     if (!analysis) {
       await checkAccount();
@@ -327,6 +329,7 @@ async function runAgentDeployment(snapshot, services) {
     const exportedVersion = analysis.inspection.version;
     for (let cycle = 0; cycle <= MAX_REPAIR_CYCLES; cycle++) {
       await checkAccount();
+      if (cycle) await repairApproval.assertValid();
       report('import', 'running', 1, cycle ? 'Retrying import after source repair (' + (cycle + 1) + ' of ' + (MAX_REPAIR_CYCLES + 1) + ')…' : 'Starting import…');
       lastImport = await dataverse.importSolutionFromFile(snapshot.targetUrl, analysis.artifact, {
         overwrite: snapshot.overwrite, publishWorkflows: true
@@ -474,15 +477,26 @@ async function runAgentDeployment(snapshot, services) {
       if (alreadyIncluded) {
         throw new Error(alreadyIncluded.label + ' is already in the exported package. The target likely needs an external solution or configuration; the agent did not add it again.');
       }
+      // Source additions and retry side effects require approval of this exact cycle.
+      if (!requestApproval) throw new Error('Dependency approval is not configured. The agent stopped before adding source dependencies.');
+      const approval = await requestApproval(snapshot, candidates, {
+        cycle: cycle + 1, error: lastImport.error, importJobId: lastImport.importJobId, unresolved
+      }, { report, checkAccount });
+      if (!approval || typeof approval.assertValid !== 'function') throw new Error('The dependency approval could not be verified.');
+      await approval.assertValid();
+      repairApproval = approval;
+      await ensureUnmanagedSource(dataverse, snapshot);
+      const approvalEvidence = { approvalEventId: approval.eventId, planHash: approval.planHash, approvalId: approval.approvalId };
       report('repair', 'running', 0, 'Checking ' + candidates.length + ' missing components in the source environment…');
       const addWithWebApi = async (fallbackReason) => {
         for (const [index, item] of candidates.entries()) {
           await checkAccount();
+          await approval.assertValid();
           await dataverse.addSolutionComponent(snapshot.sourceUrl, snapshot.solutionUniqueName, item.id, item.type);
           attempted.add(candidateKey(item));
           const method = fallbackReason ? 'Dataverse Web API fallback' : 'Dataverse Web API';
           repairs.push({
-            componentId: item.id, componentType: item.type, label: item.label, method,
+            componentId: item.id, componentType: item.type, label: item.label, method, ...approvalEvidence,
             ...(fallbackReason ? { fallbackReason: String(fallbackReason).slice(0, 300) } : {}),
             cycle: cycle + 1
           });
@@ -490,8 +504,10 @@ async function runAgentDeployment(snapshot, services) {
         }
       };
       let enteredMcpAction = false;
+      const requireMcp = snapshot.repairTransport === 'mcp';
       if (!mcp) {
-        report('repair', 'running', 0, 'Using Dataverse Web API directly. MCP is disabled by default to avoid separate MCP consent.');
+        if (requireMcp) throw new Error('Helper’s source MCP connection is required for this repair. Check Helper’s MCP client configuration and source-environment access.');
+        report('repair', 'running', 0, 'Using Dataverse Web API for approved source additions. Optional MCP is not connected for this run.');
         try {
           await addWithWebApi();
         } catch (error) {
@@ -503,6 +519,7 @@ async function runAgentDeployment(snapshot, services) {
           enteredMcpAction = true;
           for (const [index, item] of candidates.entries()) {
             await checkAccount();
+            await approval.assertValid();
             const body = {
               ComponentId: item.id,
               ComponentType: item.type,
@@ -511,15 +528,16 @@ async function runAgentDeployment(snapshot, services) {
               DoNotIncludeSubcomponents: item.type === 1
             };
             const viaMcp = await addThroughMcp(connection, body);
+            if (requireMcp && !viaMcp.supported) throw new Error('The source MCP endpoint does not advertise a supported AddSolutionComponent action. The repair stopped without switching to the API.');
             const method = viaMcp.supported ? 'Microsoft Dataverse MCP' : 'Dataverse Web API fallback';
             if (!viaMcp.supported) await dataverse.addSolutionComponent(snapshot.sourceUrl, snapshot.solutionUniqueName, item.id, item.type);
             attempted.add(candidateKey(item));
-            repairs.push({ componentId: item.id, componentType: item.type, label: item.label, method, cycle: cycle + 1 });
+            repairs.push({ componentId: item.id, componentType: item.type, label: item.label, method, cycle: cycle + 1, ...approvalEvidence });
             report('repair', 'running', Math.round((index + 1) * 100 / candidates.length), 'Added ' + item.label + ' through ' + method + '.');
           }
         });
       } catch (error) {
-        if (enteredMcpAction) {
+        if (enteredMcpAction || requireMcp) {
           report('repair', 'error', null, error.message);
           throw error;
         }
@@ -533,6 +551,7 @@ async function runAgentDeployment(snapshot, services) {
       }
       report('repair', 'done', 100, 'Added ' + candidates.length + ' component(s) to the source solution.');
       await checkAccount();
+      await approval.assertValid();
       report('publishsource', 'running', null, 'Publishing source customizations before re-export…');
       try {
         await dataverse.publishAll(snapshot.sourceUrl);
@@ -542,6 +561,7 @@ async function runAgentDeployment(snapshot, services) {
         throw new Error('Source publish failed after adding dependencies: ' + error.message);
       }
       await checkAccount();
+      await approval.assertValid();
       report('reexport', 'running', null, 'Exporting the repaired source solution…');
       const name = snapshot.solutionUniqueName + '_agent_' + crypto.randomUUID() + (snapshot.exportManaged ? '_managed' : '') + '.zip';
       const artifact = path.join(artifactsDir(), name);

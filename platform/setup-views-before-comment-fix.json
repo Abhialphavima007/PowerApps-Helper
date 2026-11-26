@@ -1,0 +1,28 @@
+{
+  "environmentUrl": "https://prexa365abhiresearch.crm3.dynamics.com",
+  "capturedOn": "2026-11-26",
+  "reason": "Recovery baseline before removing leading comments from the three Setup app list-view XML fields.",
+  "views": [
+    {
+      "savedqueryid": "30e97c2e-96b8-4c5c-b5e2-4c5c5fd6927b",
+      "name": "Notification Profiles",
+      "returnedtypecode": "abhi_deploymentprofile",
+      "fetchxml": "<!-- Last edited by SinghA@alphavima.com at 2026-11-24 18:15:00 +0530 --><fetch version=\"1.0\" mapping=\"logical\" savedqueryid=\"30e97c2e-96b8-4c5c-b5e2-4c5c5fd6927b\"><entity name=\"abhi_deploymentprofile\"><attribute name=\"abhi_deploymentprofileid\" /><attribute name=\"abhi_name\" /><attribute name=\"abhi_profilekey\" /><attribute name=\"abhi_enabled\" /><attribute name=\"abhi_successrecipients\" /><attribute name=\"abhi_failurerecipients\" /><attribute name=\"abhi_approvers\" /><attribute name=\"abhi_approvalmode\" /><order attribute=\"abhi_name\" descending=\"false\" /><filter type=\"and\"><condition attribute=\"statecode\" operator=\"eq\" value=\"0\" /></filter></entity></fetch>",
+      "layoutxml": "<!-- Last edited by SinghA@alphavima.com at 2026-11-24 18:15:00 +0530 -->\n<grid name=\"resultset\" object=\"11618\" jump=\"abhi_name\" select=\"1\" icon=\"1\" preview=\"1\"><row name=\"result\" id=\"abhi_deploymentprofileid\"><cell name=\"abhi_name\" width=\"250\" /><cell name=\"abhi_profilekey\" width=\"180\" /><cell name=\"abhi_enabled\" width=\"180\" /><cell name=\"abhi_successrecipients\" width=\"180\" /><cell name=\"abhi_failurerecipients\" width=\"180\" /><cell name=\"abhi_approvers\" width=\"180\" /><cell name=\"abhi_approvalmode\" width=\"180\" /></row></grid>"
+    },
+    {
+      "savedqueryid": "4a066f0c-2eb2-49bf-8958-865b983ec9b6",
+      "name": "Deployment Events",
+      "returnedtypecode": "abhi_deploymentevent",
+      "fetchxml": "<!-- Last edited by SinghA@alphavima.com at 2026-11-24 18:15:15 +0530 --><fetch version=\"1.0\" mapping=\"logical\" savedqueryid=\"4a066f0c-2eb2-49bf-8958-865b983ec9b6\"><entity name=\"abhi_deploymentevent\"><attribute name=\"abhi_deploymenteventid\" /><attribute name=\"abhi_name\" /><attribute name=\"abhi_completedon\" /><attribute name=\"abhi_eventtype\" /><attribute name=\"abhi_solutionname\" /><attribute name=\"abhi_targetenvironment\" /><attribute name=\"abhi_deliverystatus\" /><attribute name=\"abhi_runid\" /><order attribute=\"abhi_completedon\" descending=\"true\" /><filter type=\"and\"><condition attribute=\"statecode\" operator=\"eq\" value=\"0\" /></filter></entity></fetch>",
+      "layoutxml": "<!-- Last edited by SinghA@alphavima.com at 2026-11-24 18:15:16 +0530 -->\n<grid name=\"resultset\" object=\"11619\" jump=\"abhi_name\" select=\"1\" icon=\"1\" preview=\"1\"><row name=\"result\" id=\"abhi_deploymenteventid\"><cell name=\"abhi_name\" width=\"250\" /><cell name=\"abhi_completedon\" width=\"180\" /><cell name=\"abhi_eventtype\" width=\"180\" /><cell name=\"abhi_solutionname\" width=\"180\" /><cell name=\"abhi_targetenvironment\" width=\"180\" /><cell name=\"abhi_deliverystatus\" width=\"180\" /><cell name=\"abhi_runid\" width=\"180\" /></row></grid>"
+    },
+    {
+      "savedqueryid": "23745c58-4aa5-4acb-929c-cd96b0dbfc5d",
+      "name": "Dependency Decisions",
+      "returnedtypecode": "abhi_deploymentdecision",
+      "fetchxml": "<!-- Last edited by SinghA@alphavima.com at 2026-11-24 18:15:29 +0530 --><fetch version=\"1.0\" mapping=\"logical\" savedqueryid=\"23745c58-4aa5-4acb-929c-cd96b0dbfc5d\"><entity name=\"abhi_deploymentdecision\"><attribute name=\"abhi_deploymentdecisionid\" /><attribute name=\"abhi_name\" /><attribute name=\"abhi_respondedon\" /><attribute name=\"abhi_outcome\" /><attribute name=\"abhi_runid\" /><attribute name=\"abhi_approvalid\" /><order attribute=\"abhi_respondedon\" descending=\"true\" /><filter type=\"and\"><condition attribute=\"statecode\" operator=\"eq\" value=\"0\" /></filter></entity></fetch>",
+      "layoutxml": "<!-- Last edited by SinghA@alphavima.com at 2026-11-24 18:15:30 +0530 -->\n<grid name=\"resultset\" object=\"11620\" jump=\"abhi_name\" select=\"1\" icon=\"1\" preview=\"1\"><row name=\"result\" id=\"abhi_deploymentdecisionid\"><cell name=\"abhi_name\" width=\"250\" /><cell name=\"abhi_respondedon\" width=\"180\" /><cell name=\"abhi_outcome\" width=\"180\" /><cell name=\"abhi_runid\" width=\"180\" /><cell name=\"abhi_approvalid\" width=\"180\" /></row></grid>"
+    }
+  ]
+}

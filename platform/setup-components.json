@@ -1,0 +1,136 @@
+[
+  {
+    "table": "abhi_deploymentprofile",
+    "formId": "4e1d4cfe-d9fd-471c-9bc1-3b7a6bb9a01a",
+    "viewId": "30e97c2e-96b8-4c5c-b5e2-4c5c5fd6927b",
+    "code": 11618,
+    "name": "Notification Profiles",
+    "sections": {
+      "Notification settings": [
+        "Name",
+        "ProfileKey",
+        "Enabled",
+        "SuccessRecipients",
+        "FailureRecipients",
+        "SubjectPrefix"
+      ],
+      "Dependency approval": [
+        "Approvers",
+        "ApprovalMode",
+        "ApprovalTimeoutMinutes",
+        "ApprovalFlowUser",
+        "FlowUserId"
+      ],
+      "Email wording": [
+        "SuccessIntro",
+        "FailureIntro",
+        "ApprovalIntro"
+      ]
+    },
+    "viewFields": [
+      "abhi_name",
+      "abhi_profilekey",
+      "abhi_enabled",
+      "abhi_successrecipients",
+      "abhi_failurerecipients",
+      "abhi_approvers",
+      "abhi_approvalmode"
+    ],
+    "order": "abhi_name",
+    "formXml": "<form><tabs><tab id=\"{4c9d6fca-ee7f-2530-275b-00264bc9cc69}\" name=\"general\" verticallayout=\"true\" IsUserDefined=\"1\" expanded=\"true\"><labels><label description=\"Notification Profiles\" languagecode=\"1033\" /></labels><columns><column width=\"100%\"><sections><section id=\"{26bd1946-7b98-d22e-893e-2100b7ad52bd}\" name=\"Notification settings\" showlabel=\"true\" showbar=\"true\" IsUserDefined=\"1\" columns=\"1\"><labels><label description=\"Notification settings\" languagecode=\"1033\" /></labels><rows><row><cell id=\"{63d513b8-7455-783a-cfb9-80e471822faa}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Name\" languagecode=\"1033\" /></labels><control id=\"abhi_name\" classid=\"{4273EDBD-AC1D-40D3-9FB2-095C621B552D}\" datafieldname=\"abhi_name\" disabled=\"false\" /></cell></row><row><cell id=\"{dcdf5395-d22e-4dce-8035-c701b40f4cef}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Profile Key\" languagecode=\"1033\" /></labels><control id=\"abhi_profilekey\" classid=\"{4273EDBD-AC1D-40D3-9FB2-095C621B552D}\" datafieldname=\"abhi_profilekey\" disabled=\"false\" /></cell></row><row><cell id=\"{2dc391bb-e484-d9db-9fed-b2a6430a06f7}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Notifications Enabled\" languagecode=\"1033\" /></labels><control id=\"abhi_enabled\" classid=\"{67FAC785-CD58-4F9F-ABB3-4B7DDC6ED5ED}\" datafieldname=\"abhi_enabled\" disabled=\"false\" /></cell></row><row><cell id=\"{975c09f8-d3c6-180a-d64b-b8b81e9a48f5}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Success Email Recipients\" languagecode=\"1033\" /></labels><control id=\"abhi_successrecipients\" classid=\"{4273EDBD-AC1D-40D3-9FB2-095C621B552D}\" datafieldname=\"abhi_successrecipients\" disabled=\"false\" /></cell></row><row><cell id=\"{a485b6b9-99ed-daa1-a45d-5c164e89e2f8}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Failure Email Recipients\" languagecode=\"1033\" /></labels><control id=\"abhi_failurerecipients\" classid=\"{4273EDBD-AC1D-40D3-9FB2-095C621B552D}\" datafieldname=\"abhi_failurerecipients\" disabled=\"false\" /></cell></row><row><cell id=\"{ca111940-56f7-a4e2-b87a-196b2e5f6f41}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Email Subject Prefix\" languagecode=\"1033\" /></labels><control id=\"abhi_subjectprefix\" classid=\"{4273EDBD-AC1D-40D3-9FB2-095C621B552D}\" datafieldname=\"abhi_subjectprefix\" disabled=\"false\" /></cell></row></rows></section><section id=\"{3ea3bb07-38ba-4d98-8834-4628fabc6cc5}\" name=\"Dependency approval\" showlabel=\"true\" showbar=\"true\" IsUserDefined=\"1\" columns=\"1\"><labels><label description=\"Dependency approval\" languagecode=\"1033\" /></labels><rows><row><cell id=\"{95a2a6f2-e8ec-77ce-e330-485f15b1f3ce}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Dependency Approvers\" languagecode=\"1033\" /></labels><control id=\"abhi_approvers\" classid=\"{4273EDBD-AC1D-40D3-9FB2-095C621B552D}\" datafieldname=\"abhi_approvers\" disabled=\"false\" /></cell></row><row><cell id=\"{f8bd94a6-4c38-2812-f094-ba9d22fb6f18}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Approval Mode\" languagecode=\"1033\" /></labels><control id=\"abhi_approvalmode\" classid=\"{3EF39988-22BB-4F0B-BBBE-64B5A3748AEE}\" datafieldname=\"abhi_approvalmode\" disabled=\"false\" /></cell></row><row><cell id=\"{e29519ab-f1a9-ea5a-572c-7dbadfe5364e}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Approval Timeout (Minutes)\" languagecode=\"1033\" /></labels><control id=\"abhi_approvaltimeoutminutes\" classid=\"{C6D124CA-7EDA-4A60-AEA9-7FB8D318B68F}\" datafieldname=\"abhi_approvaltimeoutminutes\" disabled=\"false\" /></cell></row><row><cell id=\"{79e84a1e-8d7d-07f0-c1af-98bcde275d91}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Approval flow account\" languagecode=\"1033\" /></labels><control id=\"abhi_approvalflowuser\" classid=\"{270BD3DB-D9AF-4782-9025-509E298DEC0A}\" datafieldname=\"abhi_approvalflowuser\" disabled=\"false\" /></cell></row><row><cell id=\"{07b70702-6fe4-6f86-c883-970cf8191aed}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Trusted Approval Flow User ID\" languagecode=\"1033\" /></labels><control id=\"abhi_flowuserid\" classid=\"{4273EDBD-AC1D-40D3-9FB2-095C621B552D}\" datafieldname=\"abhi_flowuserid\" disabled=\"true\" /></cell></row></rows></section><section id=\"{d59717ba-d86e-e61c-5684-634e09fb5f51}\" name=\"Email wording\" showlabel=\"true\" showbar=\"true\" IsUserDefined=\"1\" columns=\"1\"><labels><label description=\"Email wording\" languagecode=\"1033\" /></labels><rows><row><cell id=\"{a04bd105-2cc9-112a-10a7-95926238dee3}\" showlabel=\"true\" rowspan=\"5\" colspan=\"1\"><labels><label description=\"Success Email Introduction\" languagecode=\"1033\" /></labels><control id=\"abhi_successintro\" classid=\"{E0DECE4B-6FC8-4A8F-A065-082708572369}\" datafieldname=\"abhi_successintro\" disabled=\"false\" /></cell></row><row /><row /><row /><row /><row><cell id=\"{20e343ed-16a3-585c-e96d-05d18e6e7b0a}\" showlabel=\"true\" rowspan=\"5\" colspan=\"1\"><labels><label description=\"Failure Email Introduction\" languagecode=\"1033\" /></labels><control id=\"abhi_failureintro\" classid=\"{E0DECE4B-6FC8-4A8F-A065-082708572369}\" datafieldname=\"abhi_failureintro\" disabled=\"false\" /></cell></row><row /><row /><row /><row /><row><cell id=\"{898ed04b-a952-d083-06b9-eaf989e4b84e}\" showlabel=\"true\" rowspan=\"5\" colspan=\"1\"><labels><label description=\"Approval Email Introduction\" languagecode=\"1033\" /></labels><control id=\"abhi_approvalintro\" classid=\"{E0DECE4B-6FC8-4A8F-A065-082708572369}\" datafieldname=\"abhi_approvalintro\" disabled=\"false\" /></cell></row><row /><row /><row /><row /></rows></section></sections></column></columns></tab></tabs><formLibraries><Library name=\"abhi_/scripts/deployment-profile.js\" libraryUniqueId=\"{f498fda8-5ea6-438f-b970-a7955f75daa6}\" /></formLibraries><events><event name=\"onload\" application=\"false\" active=\"false\"><Handlers><Handler functionName=\"ABHI.DeploymentProfile.onLoad\" libraryName=\"abhi_/scripts/deployment-profile.js\" handlerUniqueId=\"{8130d633-d534-4897-a2e5-27458e0e4809}\" enabled=\"true\" parameters=\"\" passExecutionContext=\"true\" /></Handlers></event></events></form>",
+    "fetchXml": "<fetch version=\"1.0\" mapping=\"logical\"><entity name=\"abhi_deploymentprofile\"><attribute name=\"abhi_deploymentprofileid\" /><attribute name=\"abhi_name\" /><attribute name=\"abhi_profilekey\" /><attribute name=\"abhi_enabled\" /><attribute name=\"abhi_successrecipients\" /><attribute name=\"abhi_failurerecipients\" /><attribute name=\"abhi_approvers\" /><attribute name=\"abhi_approvalmode\" /><order attribute=\"abhi_name\" descending=\"false\" /><filter type=\"and\"><condition attribute=\"statecode\" operator=\"eq\" value=\"0\" /></filter></entity></fetch>",
+    "layoutXml": "<grid name=\"resultset\" object=\"11618\" jump=\"abhi_name\" select=\"1\" icon=\"1\" preview=\"1\"><row name=\"result\" id=\"abhi_deploymentprofileid\"><cell name=\"abhi_name\" width=\"250\" /><cell name=\"abhi_profilekey\" width=\"180\" /><cell name=\"abhi_enabled\" width=\"180\" /><cell name=\"abhi_successrecipients\" width=\"180\" /><cell name=\"abhi_failurerecipients\" width=\"180\" /><cell name=\"abhi_approvers\" width=\"180\" /><cell name=\"abhi_approvalmode\" width=\"180\" /></row></grid>"
+  },
+  {
+    "table": "abhi_deploymentevent",
+    "formId": "cd751944-2790-41f8-8f02-d9098c7fcfdc",
+    "viewId": "4a066f0c-2eb2-49bf-8958-865b983ec9b6",
+    "code": 11619,
+    "name": "Deployment Events",
+    "readonly": true,
+    "sections": {
+      "Deployment": [
+        "Name",
+        "RunId",
+        "ProfileKey",
+        "EventType",
+        "SolutionName",
+        "SolutionVersion",
+        "InitiatedBy",
+        "CompletedOn",
+        "ImportJobId",
+        "RepairCycle"
+      ],
+      "Environments": [
+        "SourceEnvironment",
+        "SourceUrl",
+        "TargetEnvironment",
+        "TargetUrl"
+      ],
+      "Details": [
+        "Details",
+        "ErrorDetails",
+        "Warning"
+      ],
+      "Dependency approval request": [
+        "PlanHash",
+        "PlanJson",
+        "ExpiresOn",
+        "Recipients",
+        "ApprovalMode"
+      ],
+      "Notification delivery": [
+        "DeliveryStatus",
+        "DeliveryError"
+      ]
+    },
+    "viewFields": [
+      "abhi_name",
+      "abhi_completedon",
+      "abhi_eventtype",
+      "abhi_solutionname",
+      "abhi_targetenvironment",
+      "abhi_deliverystatus",
+      "abhi_runid"
+    ],
+    "order": "abhi_completedon",
+    "descending": true,
+    "formXml": "<form><tabs><tab id=\"{83073ff7-d44c-9c13-cd25-e30c271a7bbf}\" name=\"general\" verticallayout=\"true\" IsUserDefined=\"1\" expanded=\"true\"><labels><label description=\"Deployment Events\" languagecode=\"1033\" /></labels><columns><column width=\"100%\"><sections><section id=\"{15533e8e-3c62-face-4acd-2f26d50b9188}\" name=\"Deployment\" showlabel=\"true\" showbar=\"true\" IsUserDefined=\"1\" columns=\"1\"><labels><label description=\"Deployment\" languagecode=\"1033\" /></labels><rows><row><cell id=\"{d1176d73-2660-33aa-3a7b-836cec226ced}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Name\" languagecode=\"1033\" /></labels><control id=\"abhi_name\" classid=\"{4273EDBD-AC1D-40D3-9FB2-095C621B552D}\" datafieldname=\"abhi_name\" disabled=\"true\" /></cell></row><row><cell id=\"{80ac3458-21ef-d0a0-ff60-4c40c3c667c0}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Deployment Run ID\" languagecode=\"1033\" /></labels><control id=\"abhi_runid\" classid=\"{4273EDBD-AC1D-40D3-9FB2-095C621B552D}\" datafieldname=\"abhi_runid\" disabled=\"true\" /></cell></row><row><cell id=\"{3cc089f1-2d1d-da10-f3e0-5685b04afbdc}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Profile Key\" languagecode=\"1033\" /></labels><control id=\"abhi_profilekey\" classid=\"{4273EDBD-AC1D-40D3-9FB2-095C621B552D}\" datafieldname=\"abhi_profilekey\" disabled=\"true\" /></cell></row><row><cell id=\"{6681f4be-29ab-4e7b-5419-e497b799a933}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Event Type\" languagecode=\"1033\" /></labels><control id=\"abhi_eventtype\" classid=\"{3EF39988-22BB-4F0B-BBBE-64B5A3748AEE}\" datafieldname=\"abhi_eventtype\" disabled=\"true\" /></cell></row><row><cell id=\"{8be984ba-6ae1-b178-c16e-96a5cb85c8cb}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Solution Name\" languagecode=\"1033\" /></labels><control id=\"abhi_solutionname\" classid=\"{4273EDBD-AC1D-40D3-9FB2-095C621B552D}\" datafieldname=\"abhi_solutionname\" disabled=\"true\" /></cell></row><row><cell id=\"{f08212de-90b2-e5bc-ca0d-cbda623f5ed1}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Solution Version\" languagecode=\"1033\" /></labels><control id=\"abhi_solutionversion\" classid=\"{4273EDBD-AC1D-40D3-9FB2-095C621B552D}\" datafieldname=\"abhi_solutionversion\" disabled=\"true\" /></cell></row><row><cell id=\"{6774dcee-6f4b-2a0b-ee40-e943ad4bfc94}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Initiated By\" languagecode=\"1033\" /></labels><control id=\"abhi_initiatedby\" classid=\"{4273EDBD-AC1D-40D3-9FB2-095C621B552D}\" datafieldname=\"abhi_initiatedby\" disabled=\"true\" /></cell></row><row><cell id=\"{f08e1d2d-75bf-ae29-fe92-0cadba4ebe85}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Event Time (UTC)\" languagecode=\"1033\" /></labels><control id=\"abhi_completedon\" classid=\"{5B773807-9FB2-42DB-97C3-7A91EFF8ADFF}\" datafieldname=\"abhi_completedon\" disabled=\"true\" /></cell></row><row><cell id=\"{40732971-5273-15cb-3d4d-1c41ad98eb23}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Import Job ID\" languagecode=\"1033\" /></labels><control id=\"abhi_importjobid\" classid=\"{4273EDBD-AC1D-40D3-9FB2-095C621B552D}\" datafieldname=\"abhi_importjobid\" disabled=\"true\" /></cell></row><row><cell id=\"{615f5ef1-4880-1657-ac98-4410660b7f84}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Repair Cycle\" languagecode=\"1033\" /></labels><control id=\"abhi_repaircycle\" classid=\"{C6D124CA-7EDA-4A60-AEA9-7FB8D318B68F}\" datafieldname=\"abhi_repaircycle\" disabled=\"true\" /></cell></row></rows></section><section id=\"{999f1fa5-ed4e-163b-d247-5ad60c6d7012}\" name=\"Environments\" showlabel=\"true\" showbar=\"true\" IsUserDefined=\"1\" columns=\"1\"><labels><label description=\"Environments\" languagecode=\"1033\" /></labels><rows><row><cell id=\"{1a3dcf3b-c11c-a30b-8727-962f50695361}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Source Environment\" languagecode=\"1033\" /></labels><control id=\"abhi_sourceenvironment\" classid=\"{4273EDBD-AC1D-40D3-9FB2-095C621B552D}\" datafieldname=\"abhi_sourceenvironment\" disabled=\"true\" /></cell></row><row><cell id=\"{bf286bc0-7287-e357-f392-61cad8123c08}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Source Environment URL\" languagecode=\"1033\" /></labels><control id=\"abhi_sourceurl\" classid=\"{4273EDBD-AC1D-40D3-9FB2-095C621B552D}\" datafieldname=\"abhi_sourceurl\" disabled=\"true\" /></cell></row><row><cell id=\"{e38a548c-dce3-b021-a485-d3eb3090bd53}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Target Environment\" languagecode=\"1033\" /></labels><control id=\"abhi_targetenvironment\" classid=\"{4273EDBD-AC1D-40D3-9FB2-095C621B552D}\" datafieldname=\"abhi_targetenvironment\" disabled=\"true\" /></cell></row><row><cell id=\"{2d3a7950-e917-cfd1-57a5-e0c179dd818d}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Target Environment URL\" languagecode=\"1033\" /></labels><control id=\"abhi_targeturl\" classid=\"{4273EDBD-AC1D-40D3-9FB2-095C621B552D}\" datafieldname=\"abhi_targeturl\" disabled=\"true\" /></cell></row></rows></section><section id=\"{23428f93-f567-9964-42ba-b2bc03d3e1a8}\" name=\"Details\" showlabel=\"true\" showbar=\"true\" IsUserDefined=\"1\" columns=\"1\"><labels><label description=\"Details\" languagecode=\"1033\" /></labels><rows><row><cell id=\"{23428f93-f567-9964-42ba-b2bc03d3e1a8}\" showlabel=\"true\" rowspan=\"5\" colspan=\"1\"><labels><label description=\"Deployment Details\" languagecode=\"1033\" /></labels><control id=\"abhi_details\" classid=\"{E0DECE4B-6FC8-4A8F-A065-082708572369}\" datafieldname=\"abhi_details\" disabled=\"true\" /></cell></row><row /><row /><row /><row /><row><cell id=\"{746e41f6-6073-2872-727c-5fcdae27f9fe}\" showlabel=\"true\" rowspan=\"5\" colspan=\"1\"><labels><label description=\"Error Details\" languagecode=\"1033\" /></labels><control id=\"abhi_errordetails\" classid=\"{E0DECE4B-6FC8-4A8F-A065-082708572369}\" datafieldname=\"abhi_errordetails\" disabled=\"true\" /></cell></row><row /><row /><row /><row /><row><cell id=\"{43c003c3-12f8-3a94-3fb5-cc0a25c6e2d6}\" showlabel=\"true\" rowspan=\"5\" colspan=\"1\"><labels><label description=\"Warnings\" languagecode=\"1033\" /></labels><control id=\"abhi_warning\" classid=\"{E0DECE4B-6FC8-4A8F-A065-082708572369}\" datafieldname=\"abhi_warning\" disabled=\"true\" /></cell></row><row /><row /><row /><row /></rows></section><section id=\"{ce284f5e-58a0-7498-9bd4-626edff2c021}\" name=\"Dependency approval request\" showlabel=\"true\" showbar=\"true\" IsUserDefined=\"1\" columns=\"1\"><labels><label description=\"Dependency approval request\" languagecode=\"1033\" /></labels><rows><row><cell id=\"{06e7d2e4-bb53-6831-5f1c-8fcd8403c555}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Approved Plan SHA-256\" languagecode=\"1033\" /></labels><control id=\"abhi_planhash\" classid=\"{4273EDBD-AC1D-40D3-9FB2-095C621B552D}\" datafieldname=\"abhi_planhash\" disabled=\"true\" /></cell></row><row><cell id=\"{a7420073-2627-2a44-ee69-f6e5ce1b4f90}\" showlabel=\"true\" rowspan=\"5\" colspan=\"1\"><labels><label description=\"Exact Proposed Dependency Plan\" languagecode=\"1033\" /></labels><control id=\"abhi_planjson\" classid=\"{E0DECE4B-6FC8-4A8F-A065-082708572369}\" datafieldname=\"abhi_planjson\" disabled=\"true\" /></cell></row><row /><row /><row /><row /><row><cell id=\"{8c1b785e-7a05-2f73-c982-2d04691edd79}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Approval Expires On (UTC)\" languagecode=\"1033\" /></labels><control id=\"abhi_expireson\" classid=\"{5B773807-9FB2-42DB-97C3-7A91EFF8ADFF}\" datafieldname=\"abhi_expireson\" disabled=\"true\" /></cell></row><row><cell id=\"{f4b2de45-8a6d-6b86-76b8-a3e850c887fd}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Recipient Snapshot\" languagecode=\"1033\" /></labels><control id=\"abhi_recipients\" classid=\"{4273EDBD-AC1D-40D3-9FB2-095C621B552D}\" datafieldname=\"abhi_recipients\" disabled=\"true\" /></cell></row><row><cell id=\"{7bb83cea-d70d-f57d-615a-3d3c812ca4d5}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Approval Mode Snapshot\" languagecode=\"1033\" /></labels><control id=\"abhi_approvalmode\" classid=\"{3EF39988-22BB-4F0B-BBBE-64B5A3748AEE}\" datafieldname=\"abhi_approvalmode\" disabled=\"true\" /></cell></row></rows></section><section id=\"{6fad0dc6-946e-a3d4-3059-38c82f35e92c}\" name=\"Notification delivery\" showlabel=\"true\" showbar=\"true\" IsUserDefined=\"1\" columns=\"1\"><labels><label description=\"Notification delivery\" languagecode=\"1033\" /></labels><rows><row><cell id=\"{e7fc8e38-47c5-6d73-44c7-07819f58c055}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Notification Delivery\" languagecode=\"1033\" /></labels><control id=\"abhi_deliverystatus\" classid=\"{3EF39988-22BB-4F0B-BBBE-64B5A3748AEE}\" datafieldname=\"abhi_deliverystatus\" disabled=\"true\" /></cell></row><row><cell id=\"{a480523c-dd50-5a15-2893-a861032778bb}\" showlabel=\"true\" rowspan=\"5\" colspan=\"1\"><labels><label description=\"Notification Delivery Error\" languagecode=\"1033\" /></labels><control id=\"abhi_deliveryerror\" classid=\"{E0DECE4B-6FC8-4A8F-A065-082708572369}\" datafieldname=\"abhi_deliveryerror\" disabled=\"true\" /></cell></row><row /><row /><row /><row /></rows></section></sections></column></columns></tab></tabs></form>",
+    "fetchXml": "<fetch version=\"1.0\" mapping=\"logical\"><entity name=\"abhi_deploymentevent\"><attribute name=\"abhi_deploymenteventid\" /><attribute name=\"abhi_name\" /><attribute name=\"abhi_completedon\" /><attribute name=\"abhi_eventtype\" /><attribute name=\"abhi_solutionname\" /><attribute name=\"abhi_targetenvironment\" /><attribute name=\"abhi_deliverystatus\" /><attribute name=\"abhi_runid\" /><order attribute=\"abhi_completedon\" descending=\"true\" /><filter type=\"and\"><condition attribute=\"statecode\" operator=\"eq\" value=\"0\" /></filter></entity></fetch>",
+    "layoutXml": "<grid name=\"resultset\" object=\"11619\" jump=\"abhi_name\" select=\"1\" icon=\"1\" preview=\"1\"><row name=\"result\" id=\"abhi_deploymenteventid\"><cell name=\"abhi_name\" width=\"250\" /><cell name=\"abhi_completedon\" width=\"180\" /><cell name=\"abhi_eventtype\" width=\"180\" /><cell name=\"abhi_solutionname\" width=\"180\" /><cell name=\"abhi_targetenvironment\" width=\"180\" /><cell name=\"abhi_deliverystatus\" width=\"180\" /><cell name=\"abhi_runid\" width=\"180\" /></row></grid>"
+  },
+  {
+    "table": "abhi_deploymentdecision",
+    "formId": "3ed1b4f0-2344-42d6-a243-16398ffda143",
+    "viewId": "23745c58-4aa5-4acb-929c-cd96b0dbfc5d",
+    "code": 11620,
+    "name": "Dependency Decisions",
+    "readonly": true,
+    "sections": {
+      "Approval decision": [
+        "Name",
+        "EventId",
+        "RunId",
+        "Outcome",
+        "RespondedOn",
+        "ApprovalId",
+        "PlanHash"
+      ],
+      "Approver responses": [
+        "Responses"
+      ]
+    },
+    "viewFields": [
+      "abhi_name",
+      "abhi_respondedon",
+      "abhi_outcome",
+      "abhi_runid",
+      "abhi_approvalid"
+    ],
+    "order": "abhi_respondedon",
+    "descending": true,
+    "formXml": "<form><tabs><tab id=\"{0f9633da-21ae-ee8c-a8ab-a3012957036c}\" name=\"general\" verticallayout=\"true\" IsUserDefined=\"1\" expanded=\"true\"><labels><label description=\"Dependency Decisions\" languagecode=\"1033\" /></labels><columns><column width=\"100%\"><sections><section id=\"{35e0877d-a295-50e6-deee-cb5c4f8685e7}\" name=\"Approval decision\" showlabel=\"true\" showbar=\"true\" IsUserDefined=\"1\" columns=\"1\"><labels><label description=\"Approval decision\" languagecode=\"1033\" /></labels><rows><row><cell id=\"{195cc7bb-c7d9-1eea-a023-e6027633454d}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Name\" languagecode=\"1033\" /></labels><control id=\"abhi_name\" classid=\"{4273EDBD-AC1D-40D3-9FB2-095C621B552D}\" datafieldname=\"abhi_name\" disabled=\"true\" /></cell></row><row><cell id=\"{0e8b39ff-3604-d4f3-3df9-5543b548dc6c}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Approval Request Event ID\" languagecode=\"1033\" /></labels><control id=\"abhi_eventid\" classid=\"{4273EDBD-AC1D-40D3-9FB2-095C621B552D}\" datafieldname=\"abhi_eventid\" disabled=\"true\" /></cell></row><row><cell id=\"{81e2cd0b-d6c0-e24b-ae27-de6ce8f4b3c8}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Deployment Run ID\" languagecode=\"1033\" /></labels><control id=\"abhi_runid\" classid=\"{4273EDBD-AC1D-40D3-9FB2-095C621B552D}\" datafieldname=\"abhi_runid\" disabled=\"true\" /></cell></row><row><cell id=\"{82950442-1ec5-3645-8045-994331a9ddc2}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Approval Outcome\" languagecode=\"1033\" /></labels><control id=\"abhi_outcome\" classid=\"{3EF39988-22BB-4F0B-BBBE-64B5A3748AEE}\" datafieldname=\"abhi_outcome\" disabled=\"true\" /></cell></row><row><cell id=\"{0bc2c6ce-e931-3d9f-1076-9da7725a88f1}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Response Time (UTC)\" languagecode=\"1033\" /></labels><control id=\"abhi_respondedon\" classid=\"{5B773807-9FB2-42DB-97C3-7A91EFF8ADFF}\" datafieldname=\"abhi_respondedon\" disabled=\"true\" /></cell></row><row><cell id=\"{b5bf8dda-1411-af29-9d69-acaec7474f92}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Power Automate Approval ID\" languagecode=\"1033\" /></labels><control id=\"abhi_approvalid\" classid=\"{4273EDBD-AC1D-40D3-9FB2-095C621B552D}\" datafieldname=\"abhi_approvalid\" disabled=\"true\" /></cell></row><row><cell id=\"{f8c35bdf-c0b9-771e-ad24-c29b43d32851}\" showlabel=\"true\" rowspan=\"1\" colspan=\"1\"><labels><label description=\"Approved Plan SHA-256\" languagecode=\"1033\" /></labels><control id=\"abhi_planhash\" classid=\"{4273EDBD-AC1D-40D3-9FB2-095C621B552D}\" datafieldname=\"abhi_planhash\" disabled=\"true\" /></cell></row></rows></section><section id=\"{e5ffde4d-2901-8574-73e4-2621f1d77221}\" name=\"Approver responses\" showlabel=\"true\" showbar=\"true\" IsUserDefined=\"1\" columns=\"1\"><labels><label description=\"Approver responses\" languagecode=\"1033\" /></labels><rows><row><cell id=\"{47c1ad9d-55e0-332b-b7b5-241f2420a12b}\" showlabel=\"true\" rowspan=\"5\" colspan=\"1\"><labels><label description=\"Approver Responses and Comments\" languagecode=\"1033\" /></labels><control id=\"abhi_responses\" classid=\"{E0DECE4B-6FC8-4A8F-A065-082708572369}\" datafieldname=\"abhi_responses\" disabled=\"true\" /></cell></row><row /><row /><row /><row /></rows></section></sections></column></columns></tab></tabs></form>",
+    "fetchXml": "<fetch version=\"1.0\" mapping=\"logical\"><entity name=\"abhi_deploymentdecision\"><attribute name=\"abhi_deploymentdecisionid\" /><attribute name=\"abhi_name\" /><attribute name=\"abhi_respondedon\" /><attribute name=\"abhi_outcome\" /><attribute name=\"abhi_runid\" /><attribute name=\"abhi_approvalid\" /><order attribute=\"abhi_respondedon\" descending=\"true\" /><filter type=\"and\"><condition attribute=\"statecode\" operator=\"eq\" value=\"0\" /></filter></entity></fetch>",
+    "layoutXml": "<grid name=\"resultset\" object=\"11620\" jump=\"abhi_name\" select=\"1\" icon=\"1\" preview=\"1\"><row name=\"result\" id=\"abhi_deploymentdecisionid\"><cell name=\"abhi_name\" width=\"250\" /><cell name=\"abhi_respondedon\" width=\"180\" /><cell name=\"abhi_outcome\" width=\"180\" /><cell name=\"abhi_runid\" width=\"180\" /><cell name=\"abhi_approvalid\" width=\"180\" /></row></grid>"
+  }
+]

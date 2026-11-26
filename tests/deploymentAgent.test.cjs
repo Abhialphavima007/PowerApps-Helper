@@ -6,6 +6,16 @@ const zip = require('../electron/services/solutionZip');
 const id = '11111111-2222-4333-8444-555555555555';
 const dependency = { requiredId: id, requiredTypeCode: '61', requiredType: 'Web Resource', requiredSchema: 'new_script.js' };
 
+// These behavior fixtures explicitly simulate an authenticated approval.
+// Tests for missing/rejected/expired approval call the production entry directly.
+async function runApprovedDeployment(selected, services) {
+  return agent.runAgentDeployment(selected, {
+    requestApproval: async () => ({ eventId: id, planHash: 'synthetic-plan-hash',
+      approvalId: 'synthetic-approval', assertValid: async () => {} }),
+    ...services
+  });
+}
+
 function snapshot() {
   return {
     mode: 'source', accountId: 'account-id', account: 'person@example.com',
@@ -19,6 +29,44 @@ function snapshot() {
     analysis: { artifact: 'first.zip', inspection: { uniqueName: 'Sample', managed: true, dependencies: [] }, stored: { storedPath: 'first.zip' } }
   };
 }
+
+test('missing, rejected or unverifiable approval stops before any source side effect', async () => {
+  for (const requestApproval of [undefined, async () => { throw new Error('Rejected by approver'); },
+    async () => ({}), async () => ({ assertValid: async () => { throw new Error('Approval expired'); } })]) {
+    let imports = 0;
+    const result = await agent.runAgentDeployment(snapshot(), { requestApproval,
+      dataverse: {
+        importSolutionFromFile: async () => { imports++; return { ok:false, error:'Missing dependency', dependencies:[dependency] }; },
+        listSolutions: async () => ({ solutions:[{uniqueName:'Sample',solutionId:snapshot().solutionId,isManaged:false}] }),
+        addSolutionComponent: async () => assert.fail('Unapproved source addition'),
+        publishAll: async () => assert.fail('Unapproved publish'),
+        exportToFile: async () => assert.fail('Unapproved export')
+      }
+    });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /approval|Rejected|expired/i);
+    assert.equal(imports, 1);
+  }
+});
+
+test('approval invalidation after an addition stops publication and retry', async () => {
+  let additions = 0, imports = 0;
+  const result = await agent.runAgentDeployment(snapshot(), {
+    requestApproval: async () => ({ eventId:id, planHash:'synthetic-plan-hash', approvalId:'synthetic-approval',
+      assertValid: async () => { if (additions) throw new Error('Approval configuration changed'); } }),
+    dataverse: {
+      importSolutionFromFile: async () => { imports++; return { ok:false,error:'Missing dependency',dependencies:[dependency] }; },
+      listSolutions: async () => ({solutions:[{uniqueName:'Sample',solutionId:snapshot().solutionId,isManaged:false}]}),
+      addSolutionComponent: async () => { additions++; },
+      publishAll: async () => assert.fail('Invalidated approval must not publish'),
+      exportToFile: async () => assert.fail('Invalidated approval must not export')
+    }, mcp:null
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /Approval configuration changed/);
+  assert.equal(additions, 1);
+  assert.equal(imports, 1);
+});
 
 test('parses attributed and namespaced dependency entries in an import log', () => {
   const xml = '<ImportJob><MissingDependencies><MissingDependency canResolveMissingDependency="true"><Required type="61" id="{' + id + '}" schemaName="new_script.js" solution="Base"/><Dependent type="29" schemaName="Flow"/></MissingDependency><MissingDependency><Required type="2" schemaName="abhi_eventname" displayName="Event Name" parentSchemaName="abhi_event" parentDisplayName="Event"/><Dependent type="60"/></MissingDependency></MissingDependencies><x:MissingDependencies><x:MissingDependency><x:Required type=' + "'1'" + ' id=' + "'" + id + "'" + ' schemaName=' + "'new_table'" + '/></x:MissingDependency></x:MissingDependencies></ImportJob>';
@@ -69,7 +117,7 @@ test('repairs from a failed import, re-exports, retries, and preserves deploymen
   const selected = snapshot();
   const original = structuredClone(selected);
   const calls = { imports: [], additions: [], exports: [], stored: [], reports: [], publishes: [], order: [] };
-  const result = await agent.runAgentDeployment(selected, {
+  const result = await runApprovedDeployment(selected, {
     dataverse: {
       importSolutionFromFile: async (_target, artifact, options) => {
         calls.imports.push({ artifact, options });
@@ -121,7 +169,7 @@ test('uses the Dataverse Web API directly when MCP is disabled', async () => {
   let imports = 0;
   let additions = 0;
   const reports = [];
-  const result = await agent.runAgentDeployment(selected, {
+  const result = await runApprovedDeployment(selected, {
     dataverse: {
       importSolutionFromFile: async () => ++imports === 1
         ? { ok: false, error: 'Missing dependency', dependencies: [dependency] }
@@ -145,14 +193,14 @@ test('uses the Dataverse Web API directly when MCP is disabled', async () => {
   assert.equal(imports, 2);
   assert.equal(additions, 1);
   assert.equal(result.repairs[0].method, 'Dataverse Web API');
-  assert.ok(reports.some(([, , , message]) => /MCP is disabled by default/.test(message)));
+  assert.ok(reports.some(([, , , message]) => /Using Dataverse Web API for approved source additions/.test(message)));
 });
 
 test('stops an MCP-disabled repair when the Dataverse Web API rejects the source change', async () => {
   const selected = snapshot();
   let imports = 0;
   let exports = 0;
-  const result = await agent.runAgentDeployment(selected, {
+  const result = await runApprovedDeployment(selected, {
     dataverse: {
       importSolutionFromFile: async () => { imports++; return { ok: false, error: 'Missing dependency', dependencies: [dependency] }; },
       listSolutions: async () => ({ solutions: [{ uniqueName: 'Sample', solutionId: selected.solutionId, isManaged: false }] }),
@@ -178,7 +226,7 @@ test('exports after agent starts and ignores package dependency declarations whe
   selected.deferExport = true;
   const original = structuredClone(selected);
   const calls = { version: 0, export: 0, import: 0, repair: 0, mcp: 0 };
-  const result = await agent.runAgentDeployment(selected, {
+  const result = await runApprovedDeployment(selected, {
     dataverse: {
       listSolutions: async () => ({ solutions: [{ uniqueName: 'Sample', solutionId: selected.solutionId, isManaged: false }] }),
       setSolutionVersion: async () => { calls.version++; },
@@ -217,7 +265,7 @@ test('a deferred agent export repairs only after target import reports a depende
   let imports = 0;
   let additions = 0;
   let publishes = 0;
-  const result = await agent.runAgentDeployment(selected, {
+  const result = await runApprovedDeployment(selected, {
     dataverse: {
       listSolutions: async () => ({ solutions: [{ uniqueName: 'Sample', solutionId: selected.solutionId, isManaged: false }] }),
       setSolutionVersion: async () => {},
@@ -249,7 +297,7 @@ test('uses a matching package ID only after the target reports that missing depe
   let additions = 0;
   let publishes = 0;
   let imports = 0;
-  const result = await agent.runAgentDeployment(selected, {
+  const result = await runApprovedDeployment(selected, {
     dataverse: {
       importSolutionFromFile: async () => {
         imports++;
@@ -279,7 +327,7 @@ test('looks up a missing component ID in the source when target and package omit
   let additions = 0;
   let publishes = 0;
   let lookups = 0;
-  const result = await agent.runAgentDeployment(selected, {
+  const result = await runApprovedDeployment(selected, {
     dataverse: {
       importSolutionFromFile: async () => {
         imports++;
@@ -318,7 +366,7 @@ test('adds exact-ID dependencies and retries when other import entries have no s
   let lookups = 0;
   const mcpAdds = [];
   const reports = [];
-  const result = await agent.runAgentDeployment(selected, {
+  const result = await runApprovedDeployment(selected, {
     dataverse: {
       importSolutionFromFile: async () => ++imports === 1
         ? { ok: false, error: 'Missing dependencies', dependencies: [
@@ -365,7 +413,7 @@ test('continues to later exact dependencies without re-adding an earlier compone
   const secondId = '22222222-3333-4444-8555-666666666666';
   let imports = 0;
   const additions = [];
-  const result = await agent.runAgentDeployment(selected, {
+  const result = await runApprovedDeployment(selected, {
     dataverse: {
       importSolutionFromFile: async () => {
         imports++;
@@ -404,7 +452,7 @@ test('looks up attributes using their parent table and keeps same-named attribut
   let imports = 0;
   let lookups = 0;
   const mcpCalls = [];
-  const result = await agent.runAgentDeployment(selected, {
+  const result = await runApprovedDeployment(selected, {
     dataverse: {
       importSolutionFromFile: async () => ++imports === 1
         ? { ok: false, error: 'Missing dependency', dependencies: targetDependencies }
@@ -445,7 +493,7 @@ test('stops before re-export when publishing the repaired source fails', async (
   const selected = snapshot();
   let exports = 0;
   let imports = 0;
-  const result = await agent.runAgentDeployment(selected, {
+  const result = await runApprovedDeployment(selected, {
     dataverse: {
       importSolutionFromFile: async () => { imports++; return { ok: false, error: 'Missing dependency', dependencies: [dependency] }; },
       listSolutions: async () => ({ solutions: [{ uniqueName: 'Sample', solutionId: selected.solutionId, isManaged: false }] }),
@@ -466,7 +514,7 @@ test('uses the authenticated Dataverse API when MCP cannot connect before source
   const selected = snapshot();
   let imports = 0;
   let additions = 0;
-  const result = await agent.runAgentDeployment(selected, {
+  const result = await runApprovedDeployment(selected, {
     dataverse: {
       importSolutionFromFile: async () => ++imports === 1
         ? { ok: false, error: 'Missing dependency', dependencies: [dependency] }
@@ -491,7 +539,7 @@ test('uses the authenticated Dataverse API when MCP cannot connect before source
 test('does not fall back after MCP has begun a source action', async () => {
   const selected = snapshot();
   let additions = 0;
-  const result = await agent.runAgentDeployment(selected, {
+  const result = await runApprovedDeployment(selected, {
     dataverse: {
       importSolutionFromFile: async () => ({ ok: false, error: 'Missing dependency', dependencies: [dependency] }),
       listSolutions: async () => ({ solutions: [{ uniqueName: 'Sample', solutionId: selected.solutionId, isManaged: false }] }),
@@ -514,7 +562,7 @@ test('adds only the verified primary-name column when Dataverse reports it missi
   selected.analysis.inspection.rootComponentRefs = [{ id: entityId, type: 1 }];
   let imports = 0;
   const additions = [];
-  const result = await agent.runAgentDeployment(selected, {
+  const result = await runApprovedDeployment(selected, {
     dataverse: {
       importSolutionFromFile: async () => ++imports === 1
         ? { ok: false, error: 'PrimaryName attribute not found for Entity: abhi_TimeSlot', importLog: '<importexportxml />' }
@@ -565,7 +613,7 @@ test('stops without source changes when a reported primary-name column cannot be
   const entityId = 'aaaaaaaa-1111-4222-8333-bbbbbbbbbbbb';
   selected.analysis.inspection.rootComponentRefs = [{ id: entityId, type: 1 }];
   let additions = 0;
-  const result = await agent.runAgentDeployment(selected, {
+  const result = await runApprovedDeployment(selected, {
     dataverse: {
       importSolutionFromFile: async () => ({ ok: false, error: 'PrimaryName attribute not found for Entity: abhi_Donation' }),
       listSolutions: async () => ({ solutions: [{ uniqueName: 'Sample', solutionId: selected.solutionId, isManaged: false }] }),
@@ -585,7 +633,7 @@ test('an export failure stops before target import and remains recordable', asyn
   selected.analysis = null;
   selected.deferExport = true;
   let imports = 0;
-  const result = await agent.runAgentDeployment(selected, {
+  const result = await runApprovedDeployment(selected, {
     dataverse: {
       listSolutions: async () => ({ solutions: [{ uniqueName: 'Sample', solutionId: selected.solutionId, isManaged: false }] }),
       setSolutionVersion: async () => {},
@@ -607,7 +655,7 @@ test('stops after the same dependency remains missing and does not loop', async 
   let imports = 0;
   let additions = 0;
   const selected = snapshot();
-  const result = await agent.runAgentDeployment(selected, {
+  const result = await runApprovedDeployment(selected, {
     dataverse: {
       importSolutionFromFile: async () => { imports++; return { ok: false, error: 'Missing dependency', dependencies: [dependency] }; },
       listSolutions: async () => ({ solutions: [{ uniqueName: 'Sample', solutionId: selected.solutionId, isManaged: false }] }),
@@ -629,7 +677,7 @@ test('stops after the same dependency remains missing and does not loop', async 
 test('does not change the source when an import fails for another reason', async () => {
   let additions = 0;
   const selected = snapshot();
-  const result = await agent.runAgentDeployment(selected, {
+  const result = await runApprovedDeployment(selected, {
     dataverse: {
       importSolutionFromFile: async () => ({ ok: false, error: 'Access denied', dependencies: [dependency] }),
       addSolutionComponent: async () => { additions++; }
@@ -644,7 +692,7 @@ test('does not change the source when an import fails for another reason', async
 test('does not add a component already exported in the package', async () => {
   const selected = snapshot();
   selected.analysis.inspection.rootComponentRefs = [{ id, type: 61 }];
-  const result = await agent.runAgentDeployment(selected, {
+  const result = await runApprovedDeployment(selected, {
     dataverse: { importSolutionFromFile: async () => ({ ok: false, error: 'Missing dependency', dependencies: [dependency] }) },
     mcp: { withSourceMcp: async () => assert.fail('MCP should not be opened') }
   });
@@ -657,7 +705,7 @@ test('limits the workflow to five source repairs and six imports', async () => {
   let imports = 0;
   let additions = 0;
   let publishes = 0;
-  const result = await agent.runAgentDeployment(selected, {
+  const result = await runApprovedDeployment(selected, {
     dataverse: {
       importSolutionFromFile: async () => {
         imports++;
@@ -710,7 +758,7 @@ test('sets DoNotIncludeSubcomponents only for Entity components through MCP', as
   for (const item of cases) {
     const selected = snapshot();
     let imports = 0;
-    const result = await agent.runAgentDeployment(selected, {
+    const result = await runApprovedDeployment(selected, {
       dataverse: {
         importSolutionFromFile: async () => ++imports === 1
           ? { ok: false, error: 'Missing dependency', dependencies: [{ requiredId: item.id, requiredTypeCode: String(item.type) }] }
@@ -726,11 +774,12 @@ test('sets DoNotIncludeSubcomponents only for Entity components through MCP', as
           callTool: async (_name, args) => { added.push(args.parameters); return { isError: false, content: [] }; }
         })
       },
-      zip: { inspect: () => ({ uniqueName: 'Sample', managed: true, version: selected.version }) },
+      zip: { inspect: () => ({ uniqueName: 'Sample', managed: true, version: selected.version,
+        rootComponentRefs: item.type === 1 ? [{ id: item.id, type: 1, behavior: '1' }] : [] }) },
       artifactsDir: () => 'artifacts',
       storeArtifact: async () => ({})
     });
-    assert.equal(result.ok, true);
+    assert.equal(result.ok, true, result.error);
   }
 
   assert.deepEqual(added.map(({ ComponentType, DoNotIncludeSubcomponents }) => ({ type: ComponentType, includeSubcomponents: DoNotIncludeSubcomponents })), [

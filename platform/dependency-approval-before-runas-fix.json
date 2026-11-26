@@ -1,0 +1,627 @@
+{
+  "properties": {
+    "connectionReferences": {
+      "shared_commondataserviceforapps": {
+        "runtimeSource": "embedded",
+        "connection": {
+          "connectionReferenceLogicalName": "abhi_sharedcommondataserviceforapps_5ab79"
+        },
+        "api": {
+          "name": "shared_commondataserviceforapps"
+        }
+      },
+      "shared_approvals": {
+        "runtimeSource": "embedded",
+        "connection": {
+          "connectionReferenceLogicalName": "abhi_sharedapprovals_3625b"
+        },
+        "api": {
+          "name": "shared_approvals"
+        }
+      },
+      "shared_teams_2": {
+        "runtimeSource": "embedded",
+        "connection": {
+          "connectionReferenceLogicalName": "abhi_sharedteams_64386"
+        },
+        "api": {
+          "name": "shared_teams"
+        }
+      }
+    },
+    "definition": {
+      "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+      "contentVersion": "1.1.0.0",
+      "parameters": {
+        "$connections": {
+          "defaultValue": {},
+          "type": "Object"
+        },
+        "$authentication": {
+          "defaultValue": {},
+          "type": "SecureObject"
+        }
+      },
+      "triggers": {
+        "When_deployment_event_is_created": {
+          "metadata": {
+            "operationMetadataId": "50443b4c-cf77-4497-8c14-c12b3a817c60"
+          },
+          "type": "OpenApiConnectionWebhook",
+          "inputs": {
+            "host": {
+              "connectionName": "shared_commondataserviceforapps",
+              "operationId": "SubscribeWebhookTrigger",
+              "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps"
+            },
+            "parameters": {
+              "subscriptionRequest/message": 1,
+              "subscriptionRequest/entityname": "abhi_deploymentevent",
+              "subscriptionRequest/scope": 4,
+              "subscriptionRequest/filterexpression": "abhi_deliverystatus eq 100000000 and abhi_eventtype eq 100000002",
+              "subscriptionRequest/runas": 2
+            },
+            "authentication": "@parameters('$authentication')"
+          }
+        }
+      },
+      "actions": {
+        "Process_dependency_approval": {
+          "actions": {
+            "Load_profile": {
+              "runAfter": {},
+              "metadata": {
+                "operationMetadataId": "fb42e28c-dfa0-4fd0-afa2-73cb941a5498"
+              },
+              "type": "OpenApiConnection",
+              "inputs": {
+                "host": {
+                  "connectionName": "shared_commondataserviceforapps",
+                  "operationId": "ListRecords",
+                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps"
+                },
+                "parameters": {
+                  "entityName": "abhi_deploymentprofiles",
+                  "$filter": "abhi_profilekey eq '@{replace(triggerBody()?['abhi_profilekey'],'''','''''')}'",
+                  "$top": 2
+                },
+                "authentication": "@parameters('$authentication')"
+              }
+            },
+            "Load_existing_decisions": {
+              "runAfter": {
+                "Load_profile": [
+                  "Succeeded"
+                ]
+              },
+              "metadata": {
+                "operationMetadataId": "a6b264d6-d44a-495d-a3ce-26fc062f7ca3"
+              },
+              "type": "OpenApiConnection",
+              "inputs": {
+                "host": {
+                  "connectionName": "shared_commondataserviceforapps",
+                  "operationId": "ListRecords",
+                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps"
+                },
+                "parameters": {
+                  "entityName": "abhi_deploymentdecisions",
+                  "$filter": "abhi_eventid eq '@{triggerBody()?['abhi_deploymenteventid']}'",
+                  "$top": 1
+                },
+                "authentication": "@parameters('$authentication')"
+              }
+            },
+            "Validate_request": {
+              "actions": {
+                "Choose_approval_mode": {
+                  "actions": {
+                    "Request_every_approver": {
+                      "runAfter": {},
+                      "limit": {
+                        "timeout": "@concat('PT',string(max(1,div(sub(ticks(triggerBody()?['abhi_expireson']),ticks(utcNow())),10000000))),'S')"
+                      },
+                      "metadata": {
+                        "operationMetadataId": "16006a89-5d58-4437-afd0-11c41f2f9dd6"
+                      },
+                      "type": "OpenApiConnectionWebhook",
+                      "inputs": {
+                        "host": {
+                          "connectionName": "shared_approvals",
+                          "operationId": "StartAndWaitForAnApproval",
+                          "apiId": "/providers/Microsoft.PowerApps/apis/shared_approvals"
+                        },
+                        "parameters": {
+                          "approvalType": "BasicAwaitAll",
+                          "WebhookApprovalCreationInput/title": "@concat(coalesce(first(body('Load_profile')?['value'])?['abhi_subjectprefix'],'[PowerApps Helper]'),' Approve dependency additions: ',triggerBody()?['abhi_solutionname'], ' / Run ',triggerBody()?['abhi_runid'],' / cycle ',string(triggerBody()?['abhi_repaircycle']))",
+                          "WebhookApprovalCreationInput/assignedTo": "@triggerBody()?['abhi_recipients']",
+                          "WebhookApprovalCreationInput/details": "@concat(coalesce(first(body('Load_profile')?['value'])?['abhi_approvalintro'],''),'\n\nSolution: ',triggerBody()?['abhi_solutionname'],'\nVersion: ',coalesce(triggerBody()?['abhi_solutionversion'],''),'\nSource: ',triggerBody()?['abhi_sourceurl'],'\nTarget: ',triggerBody()?['abhi_targeturl'],'\nInitiated by: ',coalesce(triggerBody()?['abhi_initiatedby'],''),'\nRun: ',triggerBody()?['abhi_runid'],'\nApproval expiry (UTC): ',triggerBody()?['abhi_expireson'],'\nPlan SHA-256: ',triggerBody()?['abhi_planhash'],'\n\nDependency details and planned actions:\n',coalesce(triggerBody()?['abhi_details'],''),'\n\nExact proposed dependency plan (JSON):\n',triggerBody()?['abhi_planjson'],'\n\nReported deployment error:\n',coalesce(triggerBody()?['abhi_errordetails'],''))",
+                          "WebhookApprovalCreationInput/enableNotifications": true,
+                          "WebhookApprovalCreationInput/enableReassignment": false
+                        },
+                        "authentication": "@parameters('$authentication')",
+                        "retryPolicy": {
+                          "type": "none"
+                        }
+                      }
+                    }
+                  },
+                  "runAfter": {},
+                  "else": {
+                    "actions": {
+                      "Request_first_response": {
+                        "runAfter": {},
+                        "limit": {
+                          "timeout": "@concat('PT',string(max(1,div(sub(ticks(triggerBody()?['abhi_expireson']),ticks(utcNow())),10000000))),'S')"
+                        },
+                        "metadata": {
+                          "operationMetadataId": "dc581828-1e3c-481d-abfa-b65e80358a81"
+                        },
+                        "type": "OpenApiConnectionWebhook",
+                        "inputs": {
+                          "host": {
+                            "connectionName": "shared_approvals",
+                            "operationId": "StartAndWaitForAnApproval",
+                            "apiId": "/providers/Microsoft.PowerApps/apis/shared_approvals"
+                          },
+                          "parameters": {
+                            "approvalType": "Basic",
+                            "WebhookApprovalCreationInput/title": "@concat(coalesce(first(body('Load_profile')?['value'])?['abhi_subjectprefix'],'[PowerApps Helper]'),' Approve dependency additions: ',triggerBody()?['abhi_solutionname'], ' / Run ',triggerBody()?['abhi_runid'],' / cycle ',string(triggerBody()?['abhi_repaircycle']))",
+                            "WebhookApprovalCreationInput/assignedTo": "@triggerBody()?['abhi_recipients']",
+                            "WebhookApprovalCreationInput/details": "@concat(coalesce(first(body('Load_profile')?['value'])?['abhi_approvalintro'],''),'\n\nSolution: ',triggerBody()?['abhi_solutionname'],'\nVersion: ',coalesce(triggerBody()?['abhi_solutionversion'],''),'\nSource: ',triggerBody()?['abhi_sourceurl'],'\nTarget: ',triggerBody()?['abhi_targeturl'],'\nInitiated by: ',coalesce(triggerBody()?['abhi_initiatedby'],''),'\nRun: ',triggerBody()?['abhi_runid'],'\nApproval expiry (UTC): ',triggerBody()?['abhi_expireson'],'\nPlan SHA-256: ',triggerBody()?['abhi_planhash'],'\n\nDependency details and planned actions:\n',coalesce(triggerBody()?['abhi_details'],''),'\n\nExact proposed dependency plan (JSON):\n',triggerBody()?['abhi_planjson'],'\n\nReported deployment error:\n',coalesce(triggerBody()?['abhi_errordetails'],''))",
+                            "WebhookApprovalCreationInput/enableNotifications": true,
+                            "WebhookApprovalCreationInput/enableReassignment": false
+                          },
+                          "authentication": "@parameters('$authentication')",
+                          "retryPolicy": {
+                            "type": "none"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "expression": "@equals(triggerBody()?['abhi_approvalmode'],100000000)",
+                  "metadata": {
+                    "operationMetadataId": "9ceb5f66-3432-4b32-be57-ed5beabb7e0a"
+                  },
+                  "type": "If"
+                },
+                "Approval_result": {
+                  "runAfter": {
+                    "Choose_approval_mode": [
+                      "Succeeded"
+                    ]
+                  },
+                  "metadata": {
+                    "operationMetadataId": "c1af3794-2eaa-4a4e-8a76-e4382e2536dc"
+                  },
+                  "type": "Compose",
+                  "inputs": "@if(equals(triggerBody()?['abhi_approvalmode'],100000000),body('Request_every_approver'),body('Request_first_response'))"
+                },
+                "Decision": {
+                  "runAfter": {
+                    "Approval_result": [
+                      "Succeeded"
+                    ]
+                  },
+                  "metadata": {
+                    "operationMetadataId": "d5c2bab1-140f-4d2f-8b67-a3abc96021e7"
+                  },
+                  "type": "OpenApiConnection",
+                  "inputs": {
+                    "host": {
+                      "connectionName": "shared_commondataserviceforapps",
+                      "operationId": "CreateRecord",
+                      "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps"
+                    },
+                    "parameters": {
+                      "entityName": "abhi_deploymentdecisions",
+                      "item/abhi_outcome": "@if(greaterOrEquals(ticks(utcNow()),ticks(triggerBody()?['abhi_expireson'])),100000002,if(equals(outputs('Approval_result')?['outcome'],'Approve'),100000000,100000001))",
+                      "item/abhi_eventid": "@triggerBody()?['abhi_deploymenteventid']",
+                      "item/abhi_planhash": "@triggerBody()?['abhi_planhash']",
+                      "item/abhi_responses": "@string(coalesce(outputs('Approval_result')?['responses'],json('[]')))",
+                      "item/abhi_deploymentdecisionid": "@triggerBody()?['abhi_deploymenteventid']",
+                      "item/abhi_runid": "@triggerBody()?['abhi_runid']",
+                      "item/abhi_name": "@concat('Dependency decision - ',triggerBody()?['abhi_runid'])",
+                      "item/abhi_approvalid": "@coalesce(outputs('Approval_result')?['name'],outputs('Approval_result')?['approvalId'],'')",
+                      "item/abhi_respondedon": "@utcNow()"
+                    },
+                    "authentication": "@parameters('$authentication')",
+                    "retryPolicy": {
+                      "type": "none"
+                    }
+                  }
+                },
+                "Mark_approval_processed": {
+                  "runAfter": {
+                    "Decision": [
+                      "Succeeded"
+                    ]
+                  },
+                  "metadata": {
+                    "operationMetadataId": "284d9232-b472-404f-b8a3-dca396feeb8e"
+                  },
+                  "type": "OpenApiConnection",
+                  "inputs": {
+                    "host": {
+                      "connectionName": "shared_commondataserviceforapps",
+                      "operationId": "UpdateRecord",
+                      "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps"
+                    },
+                    "parameters": {
+                      "entityName": "abhi_deploymentevents",
+                      "recordId": "@triggerBody()?['abhi_deploymenteventid']",
+                      "item/abhi_deliverystatus": 100000001,
+                      "item/abhi_deliveryerror": ""
+                    },
+                    "authentication": "@parameters('$authentication')"
+                  }
+                },
+                "Teams_approval_card": {
+                  "runAfter": {},
+                  "metadata": {
+                    "operationMetadataId": "fc483e18-51a9-4dcc-8dd8-a47dc1c89889"
+                  },
+                  "type": "Compose",
+                  "inputs": {
+                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                    "type": "AdaptiveCard",
+                    "version": "1.2",
+                    "body": [
+                      {
+                        "type": "TextBlock",
+                        "text": "Dependency repair approval requested",
+                        "wrap": true,
+                        "size": "Medium",
+                        "weight": "Bolder"
+                      },
+                      {
+                        "type": "TextBlock",
+                        "text": "The deployment encountered missing dependencies. Approve or reject the Microsoft approval email whose title includes this run ID and repair cycle. You can also open Power Automate, select the environment hosting this approval flow, then Approvals → Received. Approval permits the exact listed source additions, publication, re-export and retry. Replying to this chat does not approve a repair.",
+                        "wrap": true
+                      },
+                      {
+                        "type": "FactSet",
+                        "facts": [
+                          {
+                            "title": "Solution",
+                            "value": "@string(coalesce(triggerBody()?['abhi_solutionname'],''))"
+                          },
+                          {
+                            "title": "Version",
+                            "value": "@string(coalesce(triggerBody()?['abhi_solutionversion'],''))"
+                          },
+                          {
+                            "title": "Source",
+                            "value": "@string(coalesce(triggerBody()?['abhi_sourceenvironment'],''))"
+                          },
+                          {
+                            "title": "Source URL",
+                            "value": "@string(coalesce(triggerBody()?['abhi_sourceurl'],''))"
+                          },
+                          {
+                            "title": "Target",
+                            "value": "@string(coalesce(triggerBody()?['abhi_targetenvironment'],''))"
+                          },
+                          {
+                            "title": "Target URL",
+                            "value": "@string(coalesce(triggerBody()?['abhi_targeturl'],''))"
+                          },
+                          {
+                            "title": "Requested by",
+                            "value": "@string(coalesce(triggerBody()?['abhi_initiatedby'],''))"
+                          },
+                          {
+                            "title": "Run ID",
+                            "value": "@string(coalesce(triggerBody()?['abhi_runid'],''))"
+                          },
+                          {
+                            "title": "Import job",
+                            "value": "@string(coalesce(triggerBody()?['abhi_importjobid'],''))"
+                          },
+                          {
+                            "title": "Expires (UTC)",
+                            "value": "@string(coalesce(triggerBody()?['abhi_expireson'],''))"
+                          }
+                        ]
+                      },
+                      {
+                        "type": "TextBlock",
+                        "text": "@if(equals(triggerBody()?['abhi_approvalmode'],100000000),'Rule: every selected approver must approve.','Rule: first selected member to respond decides. A rejection stops repair.')",
+                        "wrap": true
+                      },
+                      {
+                        "type": "TextBlock",
+                        "text": "@concat('Reported error: ',substring(coalesce(triggerBody()?['abhi_errordetails'],''),0,min(1500,length(coalesce(triggerBody()?['abhi_errordetails'],'')))))",
+                        "wrap": true
+                      },
+                      {
+                        "type": "TextBlock",
+                        "text": "@concat('Proposed dependencies and next steps: ',substring(coalesce(triggerBody()?['abhi_details'],''),0,min(7000,length(coalesce(triggerBody()?['abhi_details'],'')))),'\n\nFull details and exact plan are in the approval request.')",
+                        "wrap": true
+                      },
+                      {
+                        "type": "TextBlock",
+                        "text": "@concat('Repair cycle: ',string(triggerBody()?['abhi_repaircycle']),' / Plan SHA-256: ',triggerBody()?['abhi_planhash'])",
+                        "wrap": true
+                      }
+                    ],
+                    "actions": [
+                      {
+                        "type": "Action.OpenUrl",
+                        "title": "Open Power Automate approvals",
+                        "url": "https://make.powerautomate.com"
+                      }
+                    ]
+                  }
+                },
+                "Notify_each_dependency_approver": {
+                  "foreach": "@split(triggerBody()?['abhi_recipients'],';')",
+                  "actions": {
+                    "Send_private_dependency_approval": {
+                      "runAfter": {},
+                      "metadata": {
+                        "operationMetadataId": "032ed436-6b0a-4baa-a3ac-e3cd12d83d75"
+                      },
+                      "type": "OpenApiConnection",
+                      "inputs": {
+                        "host": {
+                          "connectionName": "shared_teams_2",
+                          "operationId": "PostCardToConversation",
+                          "apiId": "/providers/Microsoft.PowerApps/apis/shared_teams"
+                        },
+                        "parameters": {
+                          "poster": "Flow bot",
+                          "location": "Chat with Flow bot",
+                          "body/recipient": "@items('Notify_each_dependency_approver')",
+                          "body/messageBody": "@string(outputs('Teams_approval_card'))"
+                        },
+                        "authentication": "@parameters('$authentication')",
+                        "retryPolicy": {
+                          "type": "none"
+                        }
+                      }
+                    }
+                  },
+                  "runAfter": {
+                    "Teams_approval_card": [
+                      "Succeeded"
+                    ]
+                  },
+                  "metadata": {
+                    "operationMetadataId": "d5d80eae-0bbf-497e-953d-9741d5648c9e"
+                  },
+                  "type": "Foreach",
+                  "runtimeConfiguration": {
+                    "concurrency": {
+                      "repetitions": 1
+                    }
+                  }
+                },
+                "Record_Teams_reminder_failure": {
+                  "runAfter": {
+                    "Notify_each_dependency_approver": [
+                      "Failed",
+                      "TimedOut"
+                    ]
+                  },
+                  "metadata": {
+                    "operationMetadataId": "2ec26256-56ba-446f-bc0d-1c68fcf76480"
+                  },
+                  "type": "Compose",
+                  "inputs": "One or more Teams reminders failed. Review this run. Use the correlated authenticated approval email or Power Automate Approvals."
+                }
+              },
+              "runAfter": {
+                "Load_existing_decisions": [
+                  "Succeeded"
+                ]
+              },
+              "else": {
+                "actions": {
+                  "Record_invalid_if_undecided": {
+                    "actions": {
+                      "Invalid_decision": {
+                        "runAfter": {},
+                        "metadata": {
+                          "operationMetadataId": "3ba5789b-6cf7-4ae2-b4bb-11130367db60"
+                        },
+                        "type": "OpenApiConnection",
+                        "inputs": {
+                          "host": {
+                            "connectionName": "shared_commondataserviceforapps",
+                            "operationId": "CreateRecord",
+                            "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps"
+                          },
+                          "parameters": {
+                            "entityName": "abhi_deploymentdecisions",
+                            "item/abhi_outcome": 100000002,
+                            "item/abhi_eventid": "@triggerBody()?['abhi_deploymenteventid']",
+                            "item/abhi_planhash": "@triggerBody()?['abhi_planhash']",
+                            "item/abhi_responses": "[]",
+                            "item/abhi_deploymentdecisionid": "@triggerBody()?['abhi_deploymenteventid']",
+                            "item/abhi_runid": "@triggerBody()?['abhi_runid']",
+                            "item/abhi_name": "@concat('Dependency decision - ',triggerBody()?['abhi_runid'])",
+                            "item/abhi_approvalid": "",
+                            "item/abhi_respondedon": "@utcNow()"
+                          },
+                          "authentication": "@parameters('$authentication')",
+                          "retryPolicy": {
+                            "type": "none"
+                          }
+                        }
+                      }
+                    },
+                    "runAfter": {},
+                    "expression": "@empty(body('Load_existing_decisions')?['value'])",
+                    "metadata": {
+                      "operationMetadataId": "13b3fbd2-b803-40fe-b3a7-0a49e08180c0"
+                    },
+                    "type": "If"
+                  },
+                  "Mark_invalid_request": {
+                    "runAfter": {
+                      "Record_invalid_if_undecided": [
+                        "Succeeded",
+                        "Failed",
+                        "TimedOut",
+                        "Skipped"
+                      ]
+                    },
+                    "metadata": {
+                      "operationMetadataId": "4a390ace-df55-4f38-95aa-8d5d476169da"
+                    },
+                    "type": "OpenApiConnection",
+                    "inputs": {
+                      "host": {
+                        "connectionName": "shared_commondataserviceforapps",
+                        "operationId": "UpdateRecord",
+                        "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps"
+                      },
+                      "parameters": {
+                        "entityName": "abhi_deploymentevents",
+                        "recordId": "@triggerBody()?['abhi_deploymenteventid']",
+                        "item/abhi_deliverystatus": 100000002,
+                        "item/abhi_deliveryerror": "Approval request is expired, already processed, or no longer matches the enabled profile."
+                      },
+                      "authentication": "@parameters('$authentication')"
+                    }
+                  }
+                }
+              },
+              "expression": "@and(equals(length(body('Load_profile')?['value']),1),equals(first(body('Load_profile')?['value'])?['abhi_enabled'],true),not(empty(first(body('Load_profile')?['value'])?['abhi_flowuserid'])),empty(body('Load_existing_decisions')?['value']),not(empty(triggerBody()?['abhi_recipients'])),not(empty(triggerBody()?['abhi_planjson'])),equals(length(coalesce(triggerBody()?['abhi_planhash'],'')),64),greater(ticks(coalesce(triggerBody()?['abhi_expireson'],'2000-01-01T00:00:00Z')),ticks(utcNow())),lessOrEquals(ticks(coalesce(triggerBody()?['abhi_expireson'],'2000-01-01T00:00:00Z')),ticks(addDays(utcNow(),1))),equals(triggerBody()?['abhi_approvalmode'],first(body('Load_profile')?['value'])?['abhi_approvalmode']),equals(toLower(replace(replace(trim(coalesce(triggerBody()?['abhi_recipients'],'')),',',';'),' ','')),toLower(replace(replace(trim(coalesce(first(body('Load_profile')?['value'])?['abhi_approvers'],'')),',',';'),' ',''))))",
+              "metadata": {
+                "operationMetadataId": "7fc159f1-2e08-4fab-bbe5-4a468966e76c"
+              },
+              "type": "If"
+            }
+          },
+          "runAfter": {},
+          "metadata": {
+            "operationMetadataId": "5fb451e2-8080-43f1-9a23-4a85d22ca707"
+          },
+          "type": "Scope"
+        },
+        "Record_approval_failure": {
+          "actions": {
+            "Load_failure_decisions": {
+              "runAfter": {},
+              "metadata": {
+                "operationMetadataId": "e8f99877-8884-4188-889b-986985dff3c6"
+              },
+              "type": "OpenApiConnection",
+              "inputs": {
+                "host": {
+                  "connectionName": "shared_commondataserviceforapps",
+                  "operationId": "ListRecords",
+                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps"
+                },
+                "parameters": {
+                  "entityName": "abhi_deploymentdecisions",
+                  "$filter": "abhi_eventid eq '@{triggerBody()?['abhi_deploymenteventid']}'",
+                  "$top": 1
+                },
+                "authentication": "@parameters('$authentication')"
+              }
+            },
+            "Record_failure_if_undecided": {
+              "actions": {
+                "Failed_decision": {
+                  "runAfter": {},
+                  "metadata": {
+                    "operationMetadataId": "05779ac0-c824-4cb9-b358-8bdeb35dbb36"
+                  },
+                  "type": "OpenApiConnection",
+                  "inputs": {
+                    "host": {
+                      "connectionName": "shared_commondataserviceforapps",
+                      "operationId": "CreateRecord",
+                      "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps"
+                    },
+                    "parameters": {
+                      "entityName": "abhi_deploymentdecisions",
+                      "item/abhi_outcome": 100000002,
+                      "item/abhi_eventid": "@triggerBody()?['abhi_deploymenteventid']",
+                      "item/abhi_planhash": "@triggerBody()?['abhi_planhash']",
+                      "item/abhi_responses": "[]",
+                      "item/abhi_deploymentdecisionid": "@triggerBody()?['abhi_deploymenteventid']",
+                      "item/abhi_runid": "@triggerBody()?['abhi_runid']",
+                      "item/abhi_name": "@concat('Dependency decision - ',triggerBody()?['abhi_runid'])",
+                      "item/abhi_approvalid": "",
+                      "item/abhi_respondedon": "@utcNow()"
+                    },
+                    "authentication": "@parameters('$authentication')",
+                    "retryPolicy": {
+                      "type": "none"
+                    }
+                  }
+                }
+              },
+              "runAfter": {
+                "Load_failure_decisions": [
+                  "Succeeded"
+                ]
+              },
+              "expression": "@empty(body('Load_failure_decisions')?['value'])",
+              "metadata": {
+                "operationMetadataId": "197267b5-6613-49b4-8e97-028d191b745a"
+              },
+              "type": "If"
+            },
+            "Mark_approval_failed": {
+              "actions": {
+                "Mark_undecided_approval_failed": {
+                  "runAfter": {},
+                  "metadata": {
+                    "operationMetadataId": "fd7fc066-90d8-4ca4-bd2b-b57dce8db32e"
+                  },
+                  "type": "OpenApiConnection",
+                  "inputs": {
+                    "host": {
+                      "connectionName": "shared_commondataserviceforapps",
+                      "operationId": "UpdateRecord",
+                      "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps"
+                    },
+                    "parameters": {
+                      "entityName": "abhi_deploymentevents",
+                      "recordId": "@triggerBody()?['abhi_deploymenteventid']",
+                      "item/abhi_deliverystatus": 100000002,
+                      "item/abhi_deliveryerror": "Approval processing failed or expired. Source dependency changes remain blocked. Review the flow run history."
+                    },
+                    "authentication": "@parameters('$authentication')"
+                  }
+                }
+              },
+              "runAfter": {
+                "Record_failure_if_undecided": [
+                  "Succeeded",
+                  "Failed",
+                  "TimedOut",
+                  "Skipped"
+                ]
+              },
+              "expression": "@empty(body('Load_failure_decisions')?['value'])",
+              "metadata": {
+                "operationMetadataId": "e301f1ba-98a6-48e9-91d7-bec9a2125dc1"
+              },
+              "type": "If"
+            }
+          },
+          "runAfter": {
+            "Process_dependency_approval": [
+              "Failed",
+              "TimedOut"
+            ]
+          },
+          "metadata": {
+            "operationMetadataId": "5b975f7a-6f83-44a3-9ed6-a53eae534567"
+          },
+          "type": "Scope"
+        }
+      },
+      "outputs": {}
+    },
+    "templateName": ""
+  },
+  "schemaVersion": "1.0.0.0"
+}

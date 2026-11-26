@@ -1,0 +1,402 @@
+{
+  "properties": {
+    "connectionReferences": {
+      "shared_commondataserviceforapps": {
+        "runtimeSource": "embedded",
+        "connection": {
+          "connectionReferenceLogicalName": "abhi_DeploymentDataverse"
+        },
+        "api": {
+          "name": "shared_commondataserviceforapps"
+        }
+      },
+      "shared_approvals": {
+        "runtimeSource": "embedded",
+        "connection": {
+          "connectionReferenceLogicalName": "abhi_DeploymentApprovals"
+        },
+        "api": {
+          "name": "shared_approvals"
+        }
+      }
+    },
+    "definition": {
+      "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+      "contentVersion": "1.1.3.0",
+      "parameters": {
+        "$connections": {
+          "defaultValue": {},
+          "type": "Object"
+        },
+        "$authentication": {
+          "defaultValue": {},
+          "type": "SecureObject"
+        }
+      },
+      "triggers": {
+        "When_deployment_event_is_created": {
+          "type": "OpenApiConnectionWebhook",
+          "inputs": {
+            "host": {
+              "connectionName": "shared_commondataserviceforapps",
+              "operationId": "SubscribeWebhookTrigger",
+              "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps"
+            },
+            "parameters": {
+              "subscriptionRequest/message": 1,
+              "subscriptionRequest/entityname": "abhi_deploymentevent",
+              "subscriptionRequest/scope": 4,
+              "subscriptionRequest/filterexpression": "abhi_deliverystatus eq 100000000 and abhi_eventtype eq 100000002",
+              "subscriptionRequest/runas": 3
+            },
+            "authentication": "@parameters('$authentication')"
+          }
+        }
+      },
+      "actions": {
+        "Process_dependency_approval": {
+          "type": "Scope",
+          "runAfter": {},
+          "actions": {
+            "Load_profile": {
+              "type": "OpenApiConnection",
+              "runAfter": {},
+              "inputs": {
+                "host": {
+                  "connectionName": "shared_commondataserviceforapps",
+                  "operationId": "ListRecords",
+                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps"
+                },
+                "parameters": {
+                  "entityName": "abhi_deploymentprofiles",
+                  "$filter": "abhi_profilekey eq '@{replace(triggerBody()?['abhi_profilekey'],'''','''''')}'",
+                  "$top": 2
+                },
+                "authentication": "@parameters('$authentication')"
+              }
+            },
+            "Load_existing_decisions": {
+              "type": "OpenApiConnection",
+              "runAfter": {
+                "Load_profile": [
+                  "Succeeded"
+                ]
+              },
+              "inputs": {
+                "host": {
+                  "connectionName": "shared_commondataserviceforapps",
+                  "operationId": "ListRecords",
+                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps"
+                },
+                "parameters": {
+                  "entityName": "abhi_deploymentdecisions",
+                  "$filter": "abhi_eventid eq '@{triggerBody()?['abhi_deploymenteventid']}'",
+                  "$top": 1
+                },
+                "authentication": "@parameters('$authentication')"
+              }
+            },
+            "Validate_request": {
+              "type": "If",
+              "runAfter": {
+                "Load_existing_decisions": [
+                  "Succeeded"
+                ]
+              },
+              "expression": "@and(equals(length(body('Load_profile')?['value']),1),equals(first(body('Load_profile')?['value'])?['abhi_enabled'],true),not(empty(first(body('Load_profile')?['value'])?['abhi_flowuserid'])),empty(body('Load_existing_decisions')?['value']),not(empty(triggerBody()?['abhi_recipients'])),not(empty(triggerBody()?['abhi_planjson'])),equals(length(coalesce(triggerBody()?['abhi_planhash'],'')),64),greater(ticks(coalesce(triggerBody()?['abhi_expireson'],'2000-01-01T00:00:00Z')),ticks(utcNow())),lessOrEquals(ticks(coalesce(triggerBody()?['abhi_expireson'],'2000-01-01T00:00:00Z')),ticks(addDays(utcNow(),1))),equals(triggerBody()?['abhi_approvalmode'],first(body('Load_profile')?['value'])?['abhi_approvalmode']),equals(toLower(replace(replace(trim(coalesce(triggerBody()?['abhi_recipients'],'')),',',';'),' ','')),toLower(replace(replace(trim(coalesce(first(body('Load_profile')?['value'])?['abhi_approvers'],'')),',',';'),' ',''))))",
+              "actions": {
+                "Choose_approval_mode": {
+                  "type": "If",
+                  "runAfter": {},
+                  "expression": "@equals(triggerBody()?['abhi_approvalmode'],100000000)",
+                  "actions": {
+                    "Request_every_approver": {
+                      "type": "OpenApiConnectionWebhook",
+                      "runAfter": {},
+                      "inputs": {
+                        "host": {
+                          "connectionName": "shared_approvals",
+                          "operationId": "StartAndWaitForAnApproval",
+                          "apiId": "/providers/Microsoft.PowerApps/apis/shared_approvals"
+                        },
+                        "parameters": {
+                          "approvalType": "BasicAwaitAll",
+                          "WebhookApprovalCreationInput/title": "@concat(coalesce(first(body('Load_profile')?['value'])?['abhi_subjectprefix'],'[PowerApps Helper]'),' Approve dependency additions: ',triggerBody()?['abhi_solutionname'])",
+                          "WebhookApprovalCreationInput/assignedTo": "@triggerBody()?['abhi_recipients']",
+                          "WebhookApprovalCreationInput/details": "@concat(coalesce(first(body('Load_profile')?['value'])?['abhi_approvalintro'],''),'\n\nSolution: ',triggerBody()?['abhi_solutionname'],' / ',coalesce(triggerBody()?['abhi_solutionversion'],''),'\nFrom: ',coalesce(triggerBody()?['abhi_sourceenvironment'],''),' (',triggerBody()?['abhi_sourceurl'],')','\nTo: ',coalesce(triggerBody()?['abhi_targetenvironment'],''),' (',triggerBody()?['abhi_targeturl'],')','\n\n',first(split(coalesce(triggerBody()?['abhi_details'],''),'TECHNICAL COMPONENT REFERENCES')),'\n\nREPORTED DEPENDENCY ERROR\n',substring(coalesce(triggerBody()?['abhi_errordetails'],''),0,min(4000,length(coalesce(triggerBody()?['abhi_errordetails'],'')))),'\n\nREQUEST REFERENCE\nRun: ',triggerBody()?['abhi_runid'],' / repair cycle ',string(triggerBody()?['abhi_repaircycle']),'\nExpires (UTC): ',triggerBody()?['abhi_expireson'],'\nPlan SHA-256: ',triggerBody()?['abhi_planhash'],'\nThe exact machine plan and technical component references are retained in the Deployment Event in PowerApps Helper Setup.')",
+                          "WebhookApprovalCreationInput/enableNotifications": true,
+                          "WebhookApprovalCreationInput/enableReassignment": false
+                        },
+                        "authentication": "@parameters('$authentication')",
+                        "retryPolicy": {
+                          "type": "none"
+                        }
+                      },
+                      "limit": {
+                        "timeout": "@concat('PT',string(max(1,div(sub(ticks(triggerBody()?['abhi_expireson']),ticks(utcNow())),10000000))),'S')"
+                      }
+                    }
+                  },
+                  "else": {
+                    "actions": {
+                      "Request_first_response": {
+                        "type": "OpenApiConnectionWebhook",
+                        "runAfter": {},
+                        "inputs": {
+                          "host": {
+                            "connectionName": "shared_approvals",
+                            "operationId": "StartAndWaitForAnApproval",
+                            "apiId": "/providers/Microsoft.PowerApps/apis/shared_approvals"
+                          },
+                          "parameters": {
+                            "approvalType": "Basic",
+                            "WebhookApprovalCreationInput/title": "@concat(coalesce(first(body('Load_profile')?['value'])?['abhi_subjectprefix'],'[PowerApps Helper]'),' Approve dependency additions: ',triggerBody()?['abhi_solutionname'])",
+                            "WebhookApprovalCreationInput/assignedTo": "@triggerBody()?['abhi_recipients']",
+                            "WebhookApprovalCreationInput/details": "@concat(coalesce(first(body('Load_profile')?['value'])?['abhi_approvalintro'],''),'\n\nSolution: ',triggerBody()?['abhi_solutionname'],' / ',coalesce(triggerBody()?['abhi_solutionversion'],''),'\nFrom: ',coalesce(triggerBody()?['abhi_sourceenvironment'],''),' (',triggerBody()?['abhi_sourceurl'],')','\nTo: ',coalesce(triggerBody()?['abhi_targetenvironment'],''),' (',triggerBody()?['abhi_targeturl'],')','\n\n',first(split(coalesce(triggerBody()?['abhi_details'],''),'TECHNICAL COMPONENT REFERENCES')),'\n\nREPORTED DEPENDENCY ERROR\n',substring(coalesce(triggerBody()?['abhi_errordetails'],''),0,min(4000,length(coalesce(triggerBody()?['abhi_errordetails'],'')))),'\n\nREQUEST REFERENCE\nRun: ',triggerBody()?['abhi_runid'],' / repair cycle ',string(triggerBody()?['abhi_repaircycle']),'\nExpires (UTC): ',triggerBody()?['abhi_expireson'],'\nPlan SHA-256: ',triggerBody()?['abhi_planhash'],'\nThe exact machine plan and technical component references are retained in the Deployment Event in PowerApps Helper Setup.')",
+                            "WebhookApprovalCreationInput/enableNotifications": true,
+                            "WebhookApprovalCreationInput/enableReassignment": false
+                          },
+                          "authentication": "@parameters('$authentication')",
+                          "retryPolicy": {
+                            "type": "none"
+                          }
+                        },
+                        "limit": {
+                          "timeout": "@concat('PT',string(max(1,div(sub(ticks(triggerBody()?['abhi_expireson']),ticks(utcNow())),10000000))),'S')"
+                        }
+                      }
+                    }
+                  }
+                },
+                "Approval_result": {
+                  "type": "Compose",
+                  "runAfter": {
+                    "Choose_approval_mode": [
+                      "Succeeded"
+                    ]
+                  },
+                  "inputs": "@if(equals(triggerBody()?['abhi_approvalmode'],100000000),body('Request_every_approver'),body('Request_first_response'))"
+                },
+                "Decision": {
+                  "type": "OpenApiConnection",
+                  "runAfter": {
+                    "Approval_result": [
+                      "Succeeded"
+                    ]
+                  },
+                  "inputs": {
+                    "host": {
+                      "connectionName": "shared_commondataserviceforapps",
+                      "operationId": "CreateRecord",
+                      "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps"
+                    },
+                    "parameters": {
+                      "entityName": "abhi_deploymentdecisions",
+                      "item/abhi_deploymentdecisionid": "@triggerBody()?['abhi_deploymenteventid']",
+                      "item/abhi_name": "@concat('Dependency decision - ',triggerBody()?['abhi_runid'])",
+                      "item/abhi_eventid": "@triggerBody()?['abhi_deploymenteventid']",
+                      "item/abhi_runid": "@triggerBody()?['abhi_runid']",
+                      "item/abhi_planhash": "@triggerBody()?['abhi_planhash']",
+                      "item/abhi_outcome": "@if(greaterOrEquals(ticks(utcNow()),ticks(triggerBody()?['abhi_expireson'])),100000002,if(equals(outputs('Approval_result')?['outcome'],'Approve'),100000000,100000001))",
+                      "item/abhi_respondedon": "@utcNow()",
+                      "item/abhi_approvalid": "@coalesce(outputs('Approval_result')?['name'],outputs('Approval_result')?['approvalId'],'')",
+                      "item/abhi_responses": "@string(coalesce(outputs('Approval_result')?['responses'],json('[]')))"
+                    },
+                    "authentication": "@parameters('$authentication')",
+                    "retryPolicy": {
+                      "type": "none"
+                    }
+                  }
+                },
+                "Mark_approval_processed": {
+                  "type": "OpenApiConnection",
+                  "runAfter": {
+                    "Decision": [
+                      "Succeeded"
+                    ]
+                  },
+                  "inputs": {
+                    "host": {
+                      "connectionName": "shared_commondataserviceforapps",
+                      "operationId": "UpdateRecord",
+                      "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps"
+                    },
+                    "parameters": {
+                      "entityName": "abhi_deploymentevents",
+                      "recordId": "@triggerBody()?['abhi_deploymenteventid']",
+                      "item/abhi_deliverystatus": 100000001,
+                      "item/abhi_deliveryerror": ""
+                    },
+                    "authentication": "@parameters('$authentication')"
+                  }
+                }
+              },
+              "else": {
+                "actions": {
+                  "Record_invalid_if_undecided": {
+                    "type": "If",
+                    "runAfter": {},
+                    "expression": "@empty(body('Load_existing_decisions')?['value'])",
+                    "actions": {
+                      "Invalid_decision": {
+                        "type": "OpenApiConnection",
+                        "runAfter": {},
+                        "inputs": {
+                          "host": {
+                            "connectionName": "shared_commondataserviceforapps",
+                            "operationId": "CreateRecord",
+                            "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps"
+                          },
+                          "parameters": {
+                            "entityName": "abhi_deploymentdecisions",
+                            "item/abhi_deploymentdecisionid": "@triggerBody()?['abhi_deploymenteventid']",
+                            "item/abhi_name": "@concat('Dependency decision - ',triggerBody()?['abhi_runid'])",
+                            "item/abhi_eventid": "@triggerBody()?['abhi_deploymenteventid']",
+                            "item/abhi_runid": "@triggerBody()?['abhi_runid']",
+                            "item/abhi_planhash": "@triggerBody()?['abhi_planhash']",
+                            "item/abhi_outcome": 100000002,
+                            "item/abhi_respondedon": "@utcNow()",
+                            "item/abhi_approvalid": "",
+                            "item/abhi_responses": "[]"
+                          },
+                          "authentication": "@parameters('$authentication')",
+                          "retryPolicy": {
+                            "type": "none"
+                          }
+                        }
+                      }
+                    },
+                    "else": {
+                      "actions": {}
+                    }
+                  },
+                  "Mark_invalid_request": {
+                    "type": "OpenApiConnection",
+                    "runAfter": {
+                      "Record_invalid_if_undecided": [
+                        "Succeeded",
+                        "Failed",
+                        "TimedOut",
+                        "Skipped"
+                      ]
+                    },
+                    "inputs": {
+                      "host": {
+                        "connectionName": "shared_commondataserviceforapps",
+                        "operationId": "UpdateRecord",
+                        "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps"
+                      },
+                      "parameters": {
+                        "entityName": "abhi_deploymentevents",
+                        "recordId": "@triggerBody()?['abhi_deploymenteventid']",
+                        "item/abhi_deliverystatus": 100000002,
+                        "item/abhi_deliveryerror": "Approval request is expired, already processed, or no longer matches the enabled profile."
+                      },
+                      "authentication": "@parameters('$authentication')"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "Record_approval_failure": {
+          "type": "Scope",
+          "runAfter": {
+            "Process_dependency_approval": [
+              "Failed",
+              "TimedOut"
+            ]
+          },
+          "actions": {
+            "Load_failure_decisions": {
+              "type": "OpenApiConnection",
+              "runAfter": {},
+              "inputs": {
+                "host": {
+                  "connectionName": "shared_commondataserviceforapps",
+                  "operationId": "ListRecords",
+                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps"
+                },
+                "parameters": {
+                  "entityName": "abhi_deploymentdecisions",
+                  "$filter": "abhi_eventid eq '@{triggerBody()?['abhi_deploymenteventid']}'",
+                  "$top": 1
+                },
+                "authentication": "@parameters('$authentication')"
+              }
+            },
+            "Record_failure_if_undecided": {
+              "type": "If",
+              "runAfter": {
+                "Load_failure_decisions": [
+                  "Succeeded"
+                ]
+              },
+              "expression": "@empty(body('Load_failure_decisions')?['value'])",
+              "actions": {
+                "Failed_decision": {
+                  "type": "OpenApiConnection",
+                  "runAfter": {},
+                  "inputs": {
+                    "host": {
+                      "connectionName": "shared_commondataserviceforapps",
+                      "operationId": "CreateRecord",
+                      "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps"
+                    },
+                    "parameters": {
+                      "entityName": "abhi_deploymentdecisions",
+                      "item/abhi_deploymentdecisionid": "@triggerBody()?['abhi_deploymenteventid']",
+                      "item/abhi_name": "@concat('Dependency decision - ',triggerBody()?['abhi_runid'])",
+                      "item/abhi_eventid": "@triggerBody()?['abhi_deploymenteventid']",
+                      "item/abhi_runid": "@triggerBody()?['abhi_runid']",
+                      "item/abhi_planhash": "@triggerBody()?['abhi_planhash']",
+                      "item/abhi_outcome": 100000002,
+                      "item/abhi_respondedon": "@utcNow()",
+                      "item/abhi_approvalid": "",
+                      "item/abhi_responses": "[]"
+                    },
+                    "authentication": "@parameters('$authentication')",
+                    "retryPolicy": {
+                      "type": "none"
+                    }
+                  }
+                }
+              },
+              "else": {
+                "actions": {}
+              }
+            },
+            "Mark_approval_failed": {
+              "type": "OpenApiConnection",
+              "runAfter": {
+                "Record_failure_if_undecided": [
+                  "Succeeded",
+                  "Failed",
+                  "TimedOut",
+                  "Skipped"
+                ]
+              },
+              "inputs": {
+                "host": {
+                  "connectionName": "shared_commondataserviceforapps",
+                  "operationId": "UpdateRecord",
+                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps"
+                },
+                "parameters": {
+                  "entityName": "abhi_deploymentevents",
+                  "recordId": "@triggerBody()?['abhi_deploymenteventid']",
+                  "item/abhi_deliverystatus": 100000002,
+                  "item/abhi_deliveryerror": "Approval processing failed or expired. Source dependency changes remain blocked. Review the flow run history."
+                },
+                "authentication": "@parameters('$authentication')"
+              }
+            }
+          }
+        }
+      },
+      "outputs": {}
+    }
+  },
+  "schemaVersion": "1.0.0.0"
+}

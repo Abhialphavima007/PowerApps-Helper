@@ -28,7 +28,7 @@ function fixture(t) {
       PublicClientApplication: class {
         constructor(config) {
           this.config = config;
-          this.accounts = clients.length % 3 === 0 ? [account] : [];
+          this.accounts = config.auth.clientId === (process.env.AZURE_CLIENT_ID || '04b07795-8ddb-461a-bbee-02f9e1bf7b46') ? [account] : [];
           this.removed = [];
           this.requests = [];
           this.cache = {
@@ -60,11 +60,12 @@ function fixture(t) {
     assert(path.basename(directory).startsWith('powerapps-auth-check-'));
     fs.rmSync(directory, { recursive: true, force: true });
   });
-  return { auth, clients, progress, directory };
+  const mcp = () => clients.filter(client => client.config.auth.clientId === (process.env.DATAVERSE_MCP_CLIENT_ID || '0c412cc3-0dd6-449b-987f-05b053db9457')).at(-1);
+  return { auth, clients, mcp, progress, directory };
 }
 
 test('device-code account connection emits only public progress and saves the method', async (t) => {
-  const { auth, clients, progress } = fixture(t);
+  const { auth, clients, mcp, progress } = fixture(t);
   const result = await auth.addAccount({ method: 'deviceCode' });
   assert.equal(result.signInMethod, 'deviceCode');
   assert.deepEqual(clients[0].requests[0].scopes, [auth.GLOBAL_DISCO + '/.default']);
@@ -79,20 +80,20 @@ test('device-code account connection emits only public progress and saves the me
 });
 
 test('MCP uses the selected device-code method and the environment resource, including after restart', async (t) => {
-  const { auth, clients, progress, directory } = fixture(t);
+  const { auth, clients, mcp, progress, directory } = fixture(t);
   await auth.setSignInMethod('deviceCode');
   assert.equal(await auth.getMcpToken(resource + '/'), 'synthetic-access-token');
-  assert.equal(clients[2].requests.length, 1);
-  assert.deepEqual(clients[2].requests[0].scopes, [resource + '/.default']);
+  assert.equal(mcp().requests.length, 1);
+  assert.deepEqual(mcp().requests[0].scopes, [resource + '/.default']);
   assert.equal(progress.find((item) => item.stage === 'code').loginHint, account.username);
   auth.init(directory);
   assert.equal((await auth.status()).account.signInMethod, 'deviceCode');
   assert.equal(await auth.getMcpToken(resource), 'synthetic-access-token');
-  assert.equal(clients[5].requests.length, 1);
+  assert.equal(mcp().requests.length, 1);
 });
 
 test('changing an existing account to device code routes Dataverse and Graph prompts too', async (t) => {
-  const { auth, clients } = fixture(t);
+  const { auth, clients, mcp } = fixture(t);
   await auth.setSignInMethod('deviceCode');
   await auth.getToken(resource);
   await auth.getGraphToken(['Files.ReadWrite']);
@@ -101,16 +102,16 @@ test('changing an existing account to device code routes Dataverse and Graph pro
 });
 
 test('a cached MCP token avoids another interactive prompt', async (t) => {
-  const { auth, clients, progress } = fixture(t);
-  clients[2].accounts = [account];
-  clients[2].acquireTokenSilent = async () => ({ accessToken: 'synthetic-cached-token' });
+  const { auth, clients, mcp, progress } = fixture(t);
+  mcp().accounts = [account];
+  mcp().acquireTokenSilent = async () => ({ accessToken: 'synthetic-cached-token' });
   assert.equal(await auth.getMcpToken(resource), 'synthetic-cached-token');
-  assert.equal(clients[2].requests.length, 0);
+  assert.equal(mcp().requests.length, 0);
   assert.equal(progress.length, 0);
 });
 
 test('device-code cancellation stops polling and permits a successful retry', async (t) => {
-  const { auth, clients, progress } = fixture(t);
+  const { auth, clients, mcp, progress } = fixture(t);
   let started;
   const pending = new Promise((resolve) => { started = resolve; });
   clients[0].deviceResult = async () => { started(); return new Promise(() => {}); };
@@ -125,34 +126,34 @@ test('device-code cancellation stops polling and permits a successful retry', as
 });
 
 test('a newly introduced wrong account is removed from the MCP cache', async (t) => {
-  const { auth, clients } = fixture(t);
+  const { auth, clients, mcp } = fixture(t);
   await auth.setSignInMethod('deviceCode');
   const wrong = { homeAccountId: 'other-account', username: 'other@example.com' };
-  clients[2].deviceResult = async () => ({ account: wrong, accessToken: 'synthetic-access-token' });
+  mcp().deviceResult = async () => ({ account: wrong, accessToken: 'synthetic-access-token' });
   await assert.rejects(auth.getMcpToken(resource), /different account/);
-  assert.deepEqual(clients[2].removed, [wrong]);
+  assert.deepEqual(mcp().removed, [wrong]);
   assert.equal((await auth.status()).account.username, account.username);
 });
 
 test('a wrong account already present in the MCP cache is retained', async (t) => {
-  const { auth, clients } = fixture(t);
+  const { auth, clients, mcp } = fixture(t);
   await auth.setSignInMethod('deviceCode');
   const wrong = { homeAccountId: 'other-account', username: 'other@example.com' };
-  clients[2].accounts = [wrong];
-  clients[2].deviceResult = async () => ({ account: wrong, accessToken: 'synthetic-access-token' });
+  mcp().accounts = [wrong];
+  mcp().deviceResult = async () => ({ account: wrong, accessToken: 'synthetic-access-token' });
   await assert.rejects(auth.getMcpToken(resource), /different account/);
-  assert.deepEqual(clients[2].removed, []);
+  assert.deepEqual(mcp().removed, []);
 });
 
 test('device code preserves the administrator consent requirement', async (t) => {
-  const { auth, clients } = fixture(t);
+  const { auth, clients, mcp } = fixture(t);
   await auth.setSignInMethod('deviceCode');
-  clients[2].deviceResult = async () => { throw Object.assign(new Error('Synthetic AADSTS65001'), { errorCode: 'consent_required' }); };
+  mcp().deviceResult = async () => { throw Object.assign(new Error('Synthetic AADSTS65001'), { errorCode: 'consent_required' }); };
   await assert.rejects(auth.getMcpToken(resource), /administrator approval.*same approval/);
 });
 
 test('device-code expiry and rejection report actionable errors', async (t) => {
-  const { auth, clients } = fixture(t);
+  const { auth, clients, mcp } = fixture(t);
   for (const [code, message] of [['expired_token', /expired/], ['authorization_declined', /declined or blocked/]]) {
     clients[0].deviceResult = async () => { throw Object.assign(new Error('Synthetic error'), { errorCode: code }); };
     await assert.rejects(auth.addAccount({ method: 'deviceCode' }), message);
@@ -160,14 +161,14 @@ test('device-code expiry and rejection report actionable errors', async (t) => {
 });
 
 test('a null device-code result releases the flow', async (t) => {
-  const { auth, clients, progress } = fixture(t);
+  const { auth, clients, mcp, progress } = fixture(t);
   clients[0].deviceResult = async () => null;
   await assert.rejects(auth.addAccount({ method: 'deviceCode' }), /did not complete/);
   assert.equal(progress.at(-1).stage, 'finished');
 });
 
 test('device-code progress rejects an unsupported verification host', async (t) => {
-  const { auth, clients, progress } = fixture(t);
+  const { auth, clients, mcp, progress } = fixture(t);
   clients[0].acquireTokenByDeviceCode = async (request) => {
     request.deviceCodeCallback({ ...response, verificationUri: 'https://example.com/devicelogin' });
     assert.fail('Unsupported verification addresses must be rejected');

@@ -4,6 +4,8 @@
 
 const fs = require('fs');
 const path = require('path');
+const { settings: automationSettings, DEFAULTS: AUTOMATION_DEFAULTS } = require('./deploymentAutomation');
+const { settings: teamsSettings, DEFAULTS: TEAMS_DEFAULTS } = require('./teamsNotifications');
 
 let baseDir;
 let dbFile;
@@ -27,6 +29,8 @@ function init(userDataPath) {
 function defaultSettings() {
   return {
     theme: 'dark', // 'dark' | 'light'
+    deploymentAutomation: { ...AUTOMATION_DEFAULTS },
+    teamsNotifications: { ...TEAMS_DEFAULTS, workflowRouting: 'payload' },
     storageMode: 'local', // 'local' | 'onedrive'
     localFolder: path.join(baseDir, 'solutions'),
     oneDriveRoot: 'PowerApps Helper',
@@ -43,7 +47,15 @@ function getSettings() {
   try {
     const defaults = defaultSettings();
     const saved = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+    let deploymentAutomation;
+    try { deploymentAutomation = automationSettings(saved.deploymentAutomation); }
+    catch { deploymentAutomation = { ...AUTOMATION_DEFAULTS }; }
     return { ...defaults, ...saved, theme: saved.theme === 'light' ? 'light' : 'dark',
+      deploymentAutomation,
+      // Older callbacks have destinations fixed in the cloud flow.
+      teamsNotifications: { ...defaults.teamsNotifications, ...saved.teamsNotifications,
+        workflowRouting: saved.teamsNotifications?.workflowRouting || (saved.teamsNotifications ? 'fixed' : 'payload'),
+        transport: saved.teamsNotifications?.transport || (saved.teamsNotifications ? 'workflow' : defaults.teamsNotifications.transport) },
       clientNamesByTenant: saved.clientNamesByTenant && typeof saved.clientNamesByTenant === 'object' && !Array.isArray(saved.clientNamesByTenant) ? saved.clientNamesByTenant : {},
       aiModels: { ...defaults.aiModels, ...saved.aiModels } };
   } catch {
@@ -52,6 +64,12 @@ function getSettings() {
 }
 
 function saveSettings(patch) {
+  if (Object.prototype.hasOwnProperty.call(patch, 'teamsNotifications')) {
+    patch = { ...patch, teamsNotifications: teamsSettings(patch.teamsNotifications) };
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, 'deploymentAutomation')) {
+    patch = { ...patch, deploymentAutomation: automationSettings(patch.deploymentAutomation) };
+  }
   if (Object.prototype.hasOwnProperty.call(patch, 'theme') && !['dark', 'light'].includes(patch.theme)) {
     throw new Error('Choose light or dark mode.');
   }
@@ -107,6 +125,53 @@ function getDeployment(id) {
   return readAll().deployments.find((d) => d.id === id) || null;
 }
 
+function historyFilters(value = {}) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid history filters.');
+  const result = {};
+  for (const key of ['source', 'target', 'status', 'query', 'since']) {
+    if (value[key] != null && (typeof value[key] !== 'string' || value[key].length > 2000)) throw new Error('Invalid history filter.');
+    result[key] = value[key] || '';
+  }
+  if (result.status && !['success', 'failed', 'pending'].includes(result.status)) throw new Error('Invalid history status.');
+  if (result.since && !Number.isFinite(Date.parse(result.since))) throw new Error('Invalid history period.');
+  return result;
+}
+
+function matchingDeployments(items, value) {
+  const { source, target, status, query, since } = historyFilters(value);
+  const needle = query.trim().toLocaleLowerCase();
+  return items.filter(item => (!since || Date.parse(item.createdAt) >= Date.parse(since))
+    && (!source || (item.sourceUrl || item.sourceEnv) === source)
+    && (!target || (item.targetUrl || item.targetEnv) === target)
+    && (!status || item.status === status)
+    && (!needle || `${item.solution} ${item.solutionUniqueName || ''} ${item.workItems || ''}`.toLocaleLowerCase().includes(needle)));
+}
+
+// Keep large notes, import logs and work-item details out of page responses.
+function queryDeployments({ filters = {}, page = 1, pageSize = 25 } = {}) {
+  if (!Number.isSafeInteger(page) || page < 1 || ![10, 25, 50, 100].includes(pageSize)) throw new Error('Invalid history page.');
+  const all = listDeployments();
+  const matches = matchingDeployments(all, filters);
+  const totalPages = Math.max(1, Math.ceil(matches.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const fields = ['id', 'createdAt', 'solution', 'deploymentMethod', 'exportManaged', 'version', 'sourceEnv', 'targetEnv', 'status'];
+  const options = (name, url) => [...new Map(all.filter(item => item[name]).map(item =>
+    [item[url] || item[name], { id: item[url] || item[name], label: item[name] }])).values()]
+    .sort((a, b) => a.label.localeCompare(b.label));
+  return {
+    items: matches.slice((currentPage - 1) * pageSize, currentPage * pageSize)
+      .map(item => Object.fromEntries(fields.map(key => [key, item[key]]))),
+    page: currentPage, pageSize, totalPages, total: matches.length,
+    summary: { total: all.length, success: all.filter(item => item.status === 'success').length,
+      failed: all.filter(item => item.status === 'failed').length },
+    sourceOptions: options('sourceEnv', 'sourceUrl'), targetOptions: options('targetEnv', 'targetUrl')
+  };
+}
+
+function matchingDeploymentIds(filters) {
+  return matchingDeployments(listDeployments(), filters).map(item => item.id);
+}
+
 function addDeployment(record) {
   const data = readAll();
   const id = 'dep_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
@@ -142,6 +207,8 @@ module.exports = {
   getClientNamePreference,
   saveClientNamePreference,
   listDeployments,
+  queryDeployments,
+  matchingDeploymentIds,
   getDeployment,
   addDeployment,
   updateDeployment,

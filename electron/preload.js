@@ -69,14 +69,31 @@ contextBridge.exposeInMainWorld('api', {
     }
   },
   notifications: {
+    setupStatus: () => ipcRenderer.invoke('automation:status'),
+    retryPending: () => ipcRenderer.invoke('automation:retry'),
     onDeployment: (cb) => {
       const listener = (_event, data) => cb(data);
       ipcRenderer.on('deployment:notification', listener);
       return () => ipcRenderer.removeListener('deployment:notification', listener);
     }
   },
+  teams: {
+    connect: (expectedTransport) => ipcRenderer.invoke('teams:connect', expectedTransport),
+    checkWorkflow: () => ipcRenderer.invoke('teams:checkWorkflow'),
+    revealWorkflow: () => ipcRenderer.invoke('teams:revealWorkflow'),
+    saveWorkflow: (url, choices) => ipcRenderer.invoke('teams:saveWorkflow', url, choices),
+    removeWorkflow: () => ipcRenderer.invoke('teams:removeWorkflow'),
+    status: () => ipcRenderer.invoke('teams:status'),
+    onProgress: (cb) => {
+      const listener = (_event, data) => cb(data);
+      ipcRenderer.on('teams:progress', listener);
+      return () => ipcRenderer.removeListener('teams:progress', listener);
+    }
+  },
   history: {
     list: () => ipcRenderer.invoke('history:list'),
+    query: (options) => ipcRenderer.invoke('history:query', options),
+    matchingIds: (filters) => ipcRenderer.invoke('history:matchingIds', filters),
     get: (id) => ipcRenderer.invoke('history:get', id),
     delete: (ids) => ipcRenderer.invoke('history:delete', ids),
     export: (ids, format) => ipcRenderer.invoke('history:export', ids, format)

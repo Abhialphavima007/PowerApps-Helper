@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import WorkItemDetails from '../components/WorkItemDetails.jsx';
+import DeploymentAutomationSettings from '../components/DeploymentAutomationSettings.jsx';
+import TeamsSettings from '../components/TeamsSettings.jsx';
 
 const AI_PROVIDERS = [
   { id: 'foundry', label: 'Azure AI Foundry', hint: 'Azure AI Foundry model API key' },
@@ -8,6 +10,15 @@ const AI_PROVIDERS = [
   { id: 'claude', label: 'Claude', hint: 'Anthropic API key' },
   { id: 'grok', label: 'Grok', hint: 'xAI API key' },
   { id: 'gemini', label: 'Gemini', hint: 'Google API key' }
+];
+
+const SETTINGS_SECTIONS = [
+  { id: 'teams', label: 'Teams notifications', hint: 'People & progress updates', icon: 'M18 8h2a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2l-3 3v-3 M4 3h11a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H9l-4 3v-3H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z' },
+  { id: 'reporting', label: 'Emails & approval', hint: 'Deployment reporting', icon: 'M3 5h18v14H3Z M3 5l9 7 9-7' },
+  { id: 'storage', label: 'Solution storage', hint: 'Folders & OneDrive', icon: 'M3 7V4h6l3 3h9v13H3Z' },
+  { id: 'ai', label: 'AI providers', hint: 'Keys & models', icon: 'm12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5Z' },
+  { id: 'devops', label: 'Azure DevOps', hint: 'Work items & access', icon: 'M6 3v12a4 4 0 0 0 4 4h8 M6 7h8a4 4 0 0 1 4 4v8 M3 3h6 M15 19h6' },
+  { id: 'appearance', label: 'Appearance', hint: 'Light & dark mode', icon: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z M12 3v18' }
 ];
 
 function CredentialControl({ name, label, hint, saved, draft, editing, revealed, busy, revealBusy, onChange, onSave, onRemove, onReveal, onHide, onReplace, onCancel }) {
@@ -34,6 +45,8 @@ function CredentialControl({ name, label, hint, saved, draft, editing, revealed,
 }
 
 export default function SettingsView({ providers, onCredentialsChanged, theme, themeSaving, onThemeChange }) {
+  const [activeSection, setActiveSection] = useState('teams');
+  const pageRef = useRef(null);
   const [settings, setSettings] = useState(null);
   const [clientPreference, setClientPreference] = useState(null);
   const [clientDraft, setClientDraft] = useState('');
@@ -192,11 +205,36 @@ export default function SettingsView({ providers, onCredentialsChanged, theme, t
   if (!settings) return <div className="empty">Loading…</div>;
 
   return (
-    <div>
-      <p className="h1">Settings</p>
-      <p className="sub">Choose where exported solutions are stored. New exports use <code>Base folder / Client / Source to Target / Solution / export files</code>.</p>
+    <div className="settings-page" ref={pageRef}>
+      <header className="settings-page-header">
+        <h1 className="h1">Settings</h1>
+        <p className="sub">Your connections, deployment updates, and workspace preferences.</p>
+      </header>
+      <div className="settings-layout">
+        <nav className="settings-nav" aria-label="Settings categories">
+          <p className="settings-nav-label">WORKSPACE</p>
+          {SETTINGS_SECTIONS.map(section => <button key={section.id} type="button"
+            className={activeSection === section.id ? 'active' : ''}
+            aria-current={activeSection === section.id ? 'page' : undefined}
+            aria-controls={`settings-${section.id}`} onClick={() => {
+              setActiveSection(section.id);
+              pageRef.current?.scrollIntoView({ block: 'start' });
+            }}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={section.icon} /></svg>
+            <span><b>{section.label}</b><small>{section.hint}</small></span>
+          </button>)}
+          <p className="settings-nav-note">Configure here. Use your saved choices for future deployments.</p>
+        </nav>
+        <div className="settings-content">
+      {/* Keep each panel mounted so category changes preserve unsaved drafts. */}
+      <div id="settings-teams" hidden={activeSection !== 'teams'}>
+        <TeamsSettings settings={settings} onSaved={setSettings} />
+      </div>
+      <div id="settings-reporting" hidden={activeSection !== 'reporting'}>
+        <DeploymentAutomationSettings settings={settings} onSaved={setSettings} />
+      </div>
 
-      <div className="card">
+      <section id="settings-appearance" className="card" hidden={activeSection !== 'appearance'} aria-label="Appearance">
         <fieldset className="appearance-options" disabled={themeSaving}>
           <legend>Appearance</legend>
           <p className="muted">Choose light or dark mode. Your choice is saved on this computer.</p>
@@ -207,10 +245,11 @@ export default function SettingsView({ providers, onCredentialsChanged, theme, t
             </label>)}
           </div>
         </fieldset>
-      </div>
+      </section>
 
-      <div className="card">
-        <h3>Solution storage</h3>
+      <section id="settings-storage" className="card" hidden={activeSection !== 'storage'} aria-labelledby="storage-title">
+        <h2 id="storage-title">Solution storage</h2>
+        <p className="muted">Choose where exported solutions are stored. New exports use <code>Base folder / Client / Source to Target / Solution / export files</code>.</p>
         <div className="storage-client">
           <label htmlFor="storage-client">Client name</label>
           <input id="storage-client" value={clientDraft} maxLength={80} disabled={clientLoading || clientSaving || !clientPreference}
@@ -273,10 +312,10 @@ export default function SettingsView({ providers, onCredentialsChanged, theme, t
           </div>
         )}
         {saving && <div className="muted" style={{ marginTop: 10 }}><span className="spin" /> Saving…</div>}
-      </div>
+      </section>
 
-      <div className="card">
-        <h3>AI providers</h3>
+      <section id="settings-ai" className="card" hidden={activeSection !== 'ai'} aria-labelledby="ai-settings-title">
+        <h2 id="ai-settings-title">AI providers</h2>
         <p className="muted">Saved keys remain visible as masked fields. Showing a saved key requires Windows Hello and automatically hides it after 30 seconds. Work item details are sent to the chosen provider only when you request AI output. OpenAI requires an API key; a ChatGPT or Codex sign-in alone is not an API key.</p>
         {AI_PROVIDERS.map((item) => <div className="credential-row" key={item.id}>
           <div className="credential-heading"><b>{item.label}</b><span className={'pill ' + (providers[item.id] ? 'ok' : 'muted')}>{credentialStatus[item.id] && item.id === 'foundry' && !providers.foundry ? 'Key saved · complete setup' : credentialStatus[item.id] ? 'Saved' : providers[item.id] ? 'From .env' : 'Not configured'}</span></div>
@@ -285,10 +324,10 @@ export default function SettingsView({ providers, onCredentialsChanged, theme, t
           <label style={{ marginTop: 8 }}>{item.id === 'foundry' ? 'Model or deployment name' : 'Model'}</label>
           <input value={settings.aiModels?.[item.id] || ''} onChange={(event) => setSettings((current) => ({ ...current, aiModels: { ...current.aiModels, [item.id]: event.target.value } }))} onBlur={(event) => update({ aiModels: { [item.id]: event.target.value } })} />
         </div>)}
-      </div>
+      </section>
 
-      <div className="card">
-        <h3>Azure DevOps</h3>
+      <section id="settings-devops" className="card" hidden={activeSection !== 'devops'} aria-labelledby="devops-settings-title">
+        <h2 id="devops-settings-title">Azure DevOps</h2>
         <p className="muted">Connect an organization to load user stories, child work items, descriptions, and comments during deployment.</p>
         <label>Organization URL</label>
         <input value={settings.azureDevOpsOrgUrl || ''} onChange={(event) => setSettings((current) => ({ ...current, azureDevOpsOrgUrl: event.target.value }))} onBlur={(event) => update({ azureDevOpsOrgUrl: event.target.value })} placeholder="https://dev.azure.com/your-organization" />
@@ -305,9 +344,11 @@ export default function SettingsView({ providers, onCredentialsChanged, theme, t
           {previewError && <div className="alert warn" style={{ marginTop: 10 }}>{previewError}</div>}
           {previewDetails && <WorkItemDetails details={previewDetails} />}
         </div>
+      </section>
+      {credentialError && <div className="alert err" role="alert">{credentialError}</div>}
+      {credentialMessage && <div className="alert info" role="status">{credentialMessage}</div>}
+        </div>
       </div>
-      {credentialError && <div className="alert err">{credentialError}</div>}
-      {credentialMessage && <div className="alert info">{credentialMessage}</div>}
     </div>
   );
 }

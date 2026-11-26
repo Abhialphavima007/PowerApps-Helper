@@ -3,6 +3,7 @@ dist/
 release/
 tests/powerapps-helper/
 .env
+.local-recovery/
 *.log
 .DS_Store
 =

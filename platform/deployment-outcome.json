@@ -1,0 +1,219 @@
+{
+  "properties": {
+    "connectionReferences": {
+      "shared_commondataserviceforapps": {
+        "runtimeSource": "embedded",
+        "connection": {
+          "connectionReferenceLogicalName": "abhi_DeploymentDataverse"
+        },
+        "api": {
+          "name": "shared_commondataserviceforapps"
+        }
+      },
+      "shared_office365": {
+        "runtimeSource": "embedded",
+        "connection": {
+          "connectionReferenceLogicalName": "abhi_DeploymentOutlook"
+        },
+        "api": {
+          "name": "shared_office365"
+        }
+      }
+    },
+    "definition": {
+      "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+      "contentVersion": "1.1.3.0",
+      "parameters": {
+        "$connections": {
+          "defaultValue": {},
+          "type": "Object"
+        },
+        "$authentication": {
+          "defaultValue": {},
+          "type": "SecureObject"
+        }
+      },
+      "triggers": {
+        "When_deployment_event_is_created": {
+          "type": "OpenApiConnectionWebhook",
+          "inputs": {
+            "host": {
+              "connectionName": "shared_commondataserviceforapps",
+              "operationId": "SubscribeWebhookTrigger",
+              "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps"
+            },
+            "parameters": {
+              "subscriptionRequest/message": 1,
+              "subscriptionRequest/entityname": "abhi_deploymentevent",
+              "subscriptionRequest/scope": 4,
+              "subscriptionRequest/filterexpression": "abhi_deliverystatus eq 100000000 and (abhi_eventtype eq 100000000 or abhi_eventtype eq 100000001)",
+              "subscriptionRequest/runas": 3
+            },
+            "authentication": "@parameters('$authentication')"
+          }
+        }
+      },
+      "actions": {
+        "Deliver_outcome": {
+          "type": "Scope",
+          "runAfter": {},
+          "actions": {
+            "Load_profile": {
+              "type": "OpenApiConnection",
+              "runAfter": {},
+              "inputs": {
+                "host": {
+                  "connectionName": "shared_commondataserviceforapps",
+                  "operationId": "ListRecords",
+                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps"
+                },
+                "parameters": {
+                  "entityName": "abhi_deploymentprofiles",
+                  "$filter": "abhi_profilekey eq '@{replace(triggerBody()?['abhi_profilekey'],'''','''''')}'",
+                  "$top": 2
+                },
+                "authentication": "@parameters('$authentication')"
+              }
+            },
+            "Profile_is_enabled": {
+              "type": "If",
+              "runAfter": {
+                "Load_profile": [
+                  "Succeeded"
+                ]
+              },
+              "expression": "@and(equals(length(body('Load_profile')?['value']),1),equals(first(body('Load_profile')?['value'])?['abhi_enabled'],true))",
+              "actions": {
+                "Recipient_snapshot_is_present": {
+                  "type": "If",
+                  "runAfter": {},
+                  "expression": "@and(not(empty(triggerBody()?['abhi_recipients'])),equals(toLower(replace(replace(trim(coalesce(triggerBody()?['abhi_recipients'],'')),',',';'),' ','')),toLower(replace(replace(trim(coalesce(if(equals(triggerBody()?['abhi_eventtype'],100000000),first(body('Load_profile')?['value'])?['abhi_successrecipients'],first(body('Load_profile')?['value'])?['abhi_failurerecipients']),'')),',',';'),' ',''))))",
+                  "actions": {
+                    "Send_outcome_email": {
+                      "type": "OpenApiConnection",
+                      "runAfter": {},
+                      "inputs": {
+                        "host": {
+                          "connectionName": "shared_office365",
+                          "operationId": "SendEmailV2",
+                          "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365"
+                        },
+                        "parameters": {
+                          "emailMessage/To": "@triggerBody()?['abhi_recipients']",
+                          "emailMessage/Subject": "@concat(coalesce(first(body('Load_profile')?['value'])?['abhi_subjectprefix'],'[PowerApps Helper]'),' ',if(equals(triggerBody()?['abhi_eventtype'],100000000),'Deployment completed: ','Deployment failed: '),triggerBody()?['abhi_solutionname'],' ',coalesce(triggerBody()?['abhi_solutionversion'],''))",
+                          "emailMessage/Body": "<h2>PowerApps Helper deployment result</h2><p>@{replace(replace(replace(string(coalesce(if(equals(triggerBody()?['abhi_eventtype'],100000000),first(body('Load_profile')?['value'])?['abhi_successintro'],first(body('Load_profile')?['value'])?['abhi_failureintro']),'')),'&','&amp;'),'<','&lt;'),'>','&gt;')}</p><dl><dt><b>Solution</b></dt><dd>@{replace(replace(replace(string(coalesce(triggerBody()?['abhi_solutionname'],'')),'&','&amp;'),'<','&lt;'),'>','&gt;')}</dd><dt><b>Version</b></dt><dd>@{replace(replace(replace(string(coalesce(triggerBody()?['abhi_solutionversion'],'')),'&','&amp;'),'<','&lt;'),'>','&gt;')}</dd><dt><b>Source environment</b></dt><dd>@{replace(replace(replace(string(coalesce(triggerBody()?['abhi_sourceenvironment'],'')),'&','&amp;'),'<','&lt;'),'>','&gt;')}</dd><dt><b>Source URL</b></dt><dd>@{replace(replace(replace(string(coalesce(triggerBody()?['abhi_sourceurl'],'')),'&','&amp;'),'<','&lt;'),'>','&gt;')}</dd><dt><b>Target environment</b></dt><dd>@{replace(replace(replace(string(coalesce(triggerBody()?['abhi_targetenvironment'],'')),'&','&amp;'),'<','&lt;'),'>','&gt;')}</dd><dt><b>Target URL</b></dt><dd>@{replace(replace(replace(string(coalesce(triggerBody()?['abhi_targeturl'],'')),'&','&amp;'),'<','&lt;'),'>','&gt;')}</dd><dt><b>Initiated by</b></dt><dd>@{replace(replace(replace(string(coalesce(triggerBody()?['abhi_initiatedby'],'')),'&','&amp;'),'<','&lt;'),'>','&gt;')}</dd><dt><b>Event time (UTC)</b></dt><dd>@{replace(replace(replace(string(coalesce(triggerBody()?['abhi_completedon'],'')),'&','&amp;'),'<','&lt;'),'>','&gt;')}</dd><dt><b>Run ID</b></dt><dd>@{replace(replace(replace(string(coalesce(triggerBody()?['abhi_runid'],'')),'&','&amp;'),'<','&lt;'),'>','&gt;')}</dd><dt><b>Import job ID</b></dt><dd>@{replace(replace(replace(string(coalesce(triggerBody()?['abhi_importjobid'],'')),'&','&amp;'),'<','&lt;'),'>','&gt;')}</dd></dl><h3>Deployment details</h3><pre style=\"white-space:pre-wrap\">@{replace(replace(replace(string(coalesce(triggerBody()?['abhi_details'],'')),'&','&amp;'),'<','&lt;'),'>','&gt;')}</pre><h3>Errors</h3><pre style=\"white-space:pre-wrap\">@{replace(replace(replace(string(coalesce(triggerBody()?['abhi_errordetails'],'')),'&','&amp;'),'<','&lt;'),'>','&gt;')}</pre><h3>Warnings</h3><pre style=\"white-space:pre-wrap\">@{replace(replace(replace(string(coalesce(triggerBody()?['abhi_warning'],'')),'&','&amp;'),'<','&lt;'),'>','&gt;')}</pre>",
+                          "emailMessage/Importance": "Normal"
+                        },
+                        "authentication": "@parameters('$authentication')",
+                        "retryPolicy": {
+                          "type": "none"
+                        }
+                      }
+                    },
+                    "Mark_sent": {
+                      "type": "OpenApiConnection",
+                      "runAfter": {
+                        "Send_outcome_email": [
+                          "Succeeded"
+                        ]
+                      },
+                      "inputs": {
+                        "host": {
+                          "connectionName": "shared_commondataserviceforapps",
+                          "operationId": "UpdateRecord",
+                          "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps"
+                        },
+                        "parameters": {
+                          "entityName": "abhi_deploymentevents",
+                          "recordId": "@triggerBody()?['abhi_deploymenteventid']",
+                          "item/abhi_deliverystatus": 100000001,
+                          "item/abhi_deliveryerror": ""
+                        },
+                        "authentication": "@parameters('$authentication')"
+                      }
+                    }
+                  },
+                  "else": {
+                    "actions": {
+                      "Mark_no_recipients": {
+                        "type": "OpenApiConnection",
+                        "runAfter": {},
+                        "inputs": {
+                          "host": {
+                            "connectionName": "shared_commondataserviceforapps",
+                            "operationId": "UpdateRecord",
+                            "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps"
+                          },
+                          "parameters": {
+                            "entityName": "abhi_deploymentevents",
+                            "recordId": "@triggerBody()?['abhi_deploymenteventid']",
+                            "item/abhi_deliverystatus": 100000003,
+                            "item/abhi_deliveryerror": "Recipients are empty or no longer match the configured profile. No email was sent."
+                          },
+                          "authentication": "@parameters('$authentication')"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "else": {
+                "actions": {
+                  "Mark_profile_disabled": {
+                    "type": "OpenApiConnection",
+                    "runAfter": {},
+                    "inputs": {
+                      "host": {
+                        "connectionName": "shared_commondataserviceforapps",
+                        "operationId": "UpdateRecord",
+                        "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps"
+                      },
+                      "parameters": {
+                        "entityName": "abhi_deploymentevents",
+                        "recordId": "@triggerBody()?['abhi_deploymenteventid']",
+                        "item/abhi_deliverystatus": 100000003,
+                        "item/abhi_deliveryerror": "Profile is disabled, missing, or duplicated."
+                      },
+                      "authentication": "@parameters('$authentication')"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "Record_delivery_failure": {
+          "type": "Scope",
+          "runAfter": {
+            "Deliver_outcome": [
+              "Failed",
+              "TimedOut"
+            ]
+          },
+          "actions": {
+            "Mark_failed": {
+              "type": "OpenApiConnection",
+              "runAfter": {},
+              "inputs": {
+                "host": {
+                  "connectionName": "shared_commondataserviceforapps",
+                  "operationId": "UpdateRecord",
+                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps"
+                },
+                "parameters": {
+                  "entityName": "abhi_deploymentevents",
+                  "recordId": "@triggerBody()?['abhi_deploymenteventid']",
+                  "item/abhi_deliverystatus": 100000002,
+                  "item/abhi_deliveryerror": "Email delivery failed. Review the flow run history. Deployment outcome is unchanged."
+                },
+                "authentication": "@parameters('$authentication')"
+              }
+            }
+          }
+        }
+      },
+      "outputs": {}
+    }
+  },
+  "schemaVersion": "1.0.0.0"
+}
