@@ -1,6 +1,6 @@
 {
   "name": "powerapps-helper",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Desktop app for Power Platform solution deployment, tracking, dependency review, git integration and AI-generated deployment notes.",
   "author": "Alphavima",
   "license": "MIT",

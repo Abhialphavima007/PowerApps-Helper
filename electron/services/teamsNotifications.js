@@ -283,38 +283,61 @@ function createTeamsNotifications({ auth, credentials, getSettings, notify, onSt
       import: 'Importing solution', publish: 'Publishing target customizations', resolve: 'Resolving dependencies',
       repair: 'Adding missing components', publishsource: 'Publishing source customizations',
       reexport: 'Re-exporting solution', complete: 'Complete', export_ready: 'Export ready for review',
-      failed: 'Failed', reporting_stopped: 'Reporting stopped' };
+      failed: 'Failed', reporting_stopped: 'Reporting stopped',
+      installation: 'Microsoft installation check', authentication: 'Microsoft session check' };
     const stageName = value => Object.hasOwn(stages, value) ? stages[value] : safeText(value, 80);
-    const lines = [`PowerApps Helper — ${safeText(label, 80)}`,
-      `${run.context.displayName} v${run.context.version || 'unknown'}`,
-      run.context.displayName !== run.context.solution ? `Unique name: ${run.context.solution}` : '',
-      `Solution type: ${run.context.solutionType}`,
-      `Operation: ${run.context.operation}`,
-      `${run.context.sourceEnv || 'Source not provided'} → ${run.context.targetEnv || 'Destination not provided'}`,
-      `Initiator: ${run.context.account || 'Not provided'} · ${safeText(run.origin, 30)}`,
-      run.context.phase !== 'export' && typeof run.context.overwrite === 'boolean'
-        ? `Overwrite unmanaged customizations: ${run.context.overwrite ? 'Yes' : 'No'}` : '',
-      run.context.phase !== 'export' && run.context.solutionType === 'Managed'
-        ? 'Publish target customizations: Not applicable for managed imports'
-        : run.context.phase !== 'export' && typeof run.context.publishChanges === 'boolean'
-          ? `Publish target customizations after import: ${run.context.publishChanges ? 'Yes' : 'No'}` : '',
-      `Stage: ${stageName(update.stage || kind)}`,
-      terminal && kind === 'failure' ? `Last observed stage: ${stageName(run.latest.stage)}` : '',
-      kind === 'progress' ? `Last observed update (UTC): ${run.observedAt}` : '',
-      Number.isFinite(update.percent) ? `Stage progress: ${Math.max(0, Math.min(100, update.percent))}%` : '',
-      terminal && run.resultDetails.attempts !== undefined ? `Import attempts: ${run.resultDetails.attempts}` : '',
-      terminal && run.resultDetails.repairs !== undefined ? `Dependency components added: ${run.resultDetails.repairs}` : '',
-      terminal && run.resultDetails.importJobId ? `Import job: ${run.resultDetails.importJobId}` : ''
-    ].filter(Boolean);
-    const footer = [`Started (UTC): ${new Date(run.startedAt).toISOString()}`,
-      terminal ? `${run.outcome === 'unknown' ? 'Reporting stopped' : 'Finished'} (UTC): ${new Date(eventTime).toISOString()}` : '',
-      `Elapsed: ${elapsed}`, `Run: ${safeText(run.id, 100)}`,
-      !terminal ? `Update time (UTC): ${new Date(eventTime).toISOString()}` : ''
-    ].filter(Boolean);
-    // Reserve space for identifiers/timing within the live workflow's 2,000-character details limit.
-    const available = Math.max(0, 2000 - [...lines, ...footer].join('\n').length - 1);
-    const detail = safeText(update.message, Math.min(500, available));
-    return [...lines, ...(detail ? [detail] : []), ...footer].join('\n');
+    const title = `PowerApps Helper — ${safeText(label, 80)}${run.context.queuePosition ? ' · ' + run.context.queuePosition : ''}`;
+    const sections = [
+      { heading: '1. Solution', fields: [
+        ['Name', safeText(run.context.displayName, 100)],
+        ['Unique name', safeText(run.context.solution, 100)],
+        ['Version', run.context.version || 'Not provided'], ['Type', run.context.solutionType]
+      ] },
+      { heading: '2. Deployment', fields: [
+        ['Operation', run.context.operation],
+        run.context.queuePosition && ['Queue order', run.context.queuePosition],
+        ['Source', safeText(run.context.sourceEnv || 'Not provided', 100)],
+        ['Target', safeText(run.context.targetEnv || 'Not provided', 100)],
+        ['Initiator', safeText(run.context.account || 'Not provided', 100)],
+        ['Started from', safeText(run.origin, 30)],
+        run.context.phase !== 'export' && typeof run.context.overwrite === 'boolean'
+          && ['Overwrite unmanaged customizations', run.context.overwrite ? 'Yes' : 'No'],
+        run.context.phase !== 'export' && (run.context.solutionType === 'Managed'
+          ? ['Publish target customizations', 'Not applicable for managed imports']
+          : typeof run.context.publishChanges === 'boolean'
+            && ['Publish target customizations', run.context.publishChanges ? 'Yes' : 'No'])
+      ].filter(Boolean) },
+      { heading: '3. Status', fields: [
+        ['Stage', stageName(update.stage || kind)],
+        terminal && kind === 'failure' && ['Failed at', stageName(run.resultDetails.phase || run.latest.stage)],
+        terminal && run.resultDetails.importCompleted !== undefined && ['Import', run.resultDetails.importCompleted
+          ? 'Completed' : run.resultDetails.phase === 'installation' && !run.resultDetails.importJobId
+            ? 'Not started' : 'Completion not confirmed'],
+        Number.isFinite(update.percent) && ['Stage progress', `${Math.max(0, Math.min(100, update.percent))}%`],
+        terminal && run.resultDetails.attempts !== undefined && ['Import attempts', String(run.resultDetails.attempts)],
+        terminal && run.resultDetails.repairs !== undefined && ['Dependency components added', String(run.resultDetails.repairs)],
+        terminal && run.resultDetails.importJobId && ['Import job', run.resultDetails.importJobId]
+      ].filter(Boolean) },
+      { heading: '4. Timing', fields: [
+        ['Started (UTC)', new Date(run.startedAt).toISOString()],
+        terminal && [run.outcome === 'unknown' ? 'Reporting stopped (UTC)' : 'Finished (UTC)', new Date(eventTime).toISOString()],
+        !terminal && ['Update time (UTC)', new Date(eventTime).toISOString()],
+        kind === 'progress' && ['Last observed update (UTC)', run.observedAt],
+        ['Elapsed', elapsed], ['Run', safeText(run.id, 100)]
+      ].filter(Boolean) }
+    ];
+    // Escape values so errors/names cannot introduce headings, links or HTML.
+    const markdown = value => String(value).replace(/[\r\n]+/g, ' ').replace(/[\\`*_{}\[\]()<>#!|]/g, '\\$&');
+    const fieldText = ([name, value]) => `- **${name}:** ${markdown(value)}`;
+    const sectionText = section => [`**${section.heading}**`, ...section.fields.map(fieldText)].join('\n');
+    const text = () => [markdown(title), ...sections.map(sectionText)].join('\n\n');
+    const detailLabel = kind === 'failure' ? 'Error' : 'Update';
+    let detail = safeText(update.message, 500);
+    // The workflow bounds each section's TextBlock at 2,000 characters.
+    const available = Math.max(0, 2000 - sectionText(sections[2]).length - fieldText([detailLabel, '']).length - 1);
+    while (detail && markdown(detail).length > available) detail = detail.slice(0, -1);
+    if (detail) sections[2].fields.push([detailLabel, detail]);
+    return { text: text(), title, sections };
   }
   function enqueue(run, kind, update) {
     if (!run.config.enabled || !run.config[kind] || run.cancelled) return;
@@ -342,7 +365,7 @@ function createTeamsNotifications({ auth, credentials, getSettings, notify, onSt
               groupChats: run.destinations.filter(dest => dest.group).map(dest => dest.group.chatId),
               channels: run.destinations.filter(dest => dest.channel).map(dest => dest.channel)
             } : {}) } : undefined;
-          await workflow.post(run.workflow.url, message(run, kind, update), run.controller.signal, helper);
+          await workflow.post(run.workflow.url, message(run, kind, update).text, run.controller.signal, helper);
           if (run.cancelled) return;
           run.sent += 1;
           run.state = 'workflow_accepted';
@@ -360,7 +383,12 @@ function createTeamsNotifications({ auth, credentials, getSettings, notify, onSt
       for (const dest of run.destinations.filter(d => d.state !== 'failed')) {
         if (!allowed(run) || (kind === 'progress' && run.closed)) break;
         try {
-          await request(run.accountId, dest.route, { body: { contentType: 'text', content: message(run, kind, update) } }, false, run);
+          const formatted = message(run, kind, update);
+          const html = value => String(value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+          const content = `<p><strong>${html(formatted.title)}</strong></p>` + formatted.sections.map(section =>
+            `<p><strong>${html(section.heading)}</strong></p><ul>` + section.fields.map(([name, value]) =>
+              `<li><strong>${html(name)}:</strong> ${html(value)}</li>`).join('') + '</ul>').join('');
+          await request(run.accountId, dest.route, { body: { contentType: 'html', content } }, false, run);
           dest.sent = (dest.sent || 0) + 1; dest.state = 'accepted'; run.sent += 1;
         } catch (error) {
           if (run.cancelled) { dest.state = 'uncertain'; announce(run); return; }
@@ -404,6 +432,9 @@ function createTeamsNotifications({ auth, credentials, getSettings, notify, onSt
         overwrite: typeof snapshot.overwrite === 'boolean' ? snapshot.overwrite : undefined,
         publishChanges: typeof snapshot.publishChanges === 'boolean' ? snapshot.publishChanges : undefined,
         phase: snapshot.phase === 'export' ? 'export' : 'deployment',
+        queuePosition: Number.isInteger(snapshot.queueIndex) && Number.isInteger(snapshot.queueCount) &&
+          snapshot.queueIndex >= 0 && snapshot.queueIndex < snapshot.queueCount && snapshot.queueCount <= 100
+          ? `Solution ${snapshot.queueIndex + 1} of ${snapshot.queueCount}` : '',
         version: safeText(snapshot.version || snapshot.analysis?.inspection?.version, 50), sourceEnv: safeText(snapshot.sourceEnv, 150),
         targetEnv: safeText(snapshot.targetEnv, 150), account: safeText(snapshot.account, 150) },
       destinations: [...config.recipients.split('; ').filter(Boolean).map(name => ({ name, state: 'pending' })),
@@ -448,8 +479,11 @@ function createTeamsNotifications({ auth, credentials, getSettings, notify, onSt
     run.outcome = result.stale ? 'unknown' : result.ok ? 'success' : 'failure';
     run.completedAt = Date.now();
     run.resultDetails = {
-      attempts: Array.isArray(result.attempts) ? result.attempts.length : undefined,
+      attempts: Array.isArray(result.attempts) ? result.attempts.filter(attempt =>
+        attempt?.importJobId || !['installation', 'authentication'].includes(attempt?.phase)).length : undefined,
       repairs: Array.isArray(result.repairs) ? result.repairs.length : undefined,
+      phase: safeText(result.phase, 40),
+      importCompleted: typeof result.importCompleted === 'boolean' ? result.importCompleted : undefined,
       importJobId: /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(result.importJobId || '') ? result.importJobId : ''
     };
     clearInterval(run.timer);

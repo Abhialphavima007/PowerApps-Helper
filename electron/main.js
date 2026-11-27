@@ -22,6 +22,8 @@ const azureDevOps = require('./services/azureDevOps');
 const windowsHello = require('./services/windowsHello');
 const { createDeploymentPower } = require('./services/deploymentPower');
 const deploymentAgent = require('./services/deploymentAgent');
+const deploymentQueue = require('./services/deploymentQueue');
+const packageLibrary = require('./services/packageLibrary');
 const { createDeploymentNotifier } = require('./services/deploymentNotifications');
 const { createDeploymentAutomation, settings: automationSettings } = require('./services/deploymentAutomation');
 const { createTeamsNotifications } = require('./services/teamsNotifications');
@@ -180,18 +182,24 @@ async function saveDeploymentRecord(record) {
 function registerIpc() {
   let revealPending = false;
   let agentBusy = false;
+  const exclusiveDeployment = action => deploymentHandler(async (_event, params) => {
+    if (agentBusy) return fail(new Error('A deployment is already running. Wait for it to finish.'));
+    agentBusy = true;
+    try { return await action(params); }
+    finally { agentBusy = false; }
+  });
   // --- Auth (multi-account) ---
   ipcMain.handle('auth:status', () => auth.status());
   ipcMain.handle('auth:add', async (_event, options) => {
-    if (agentBusy) return fail(new Error('Wait for the deployment agent to finish before adding an account.'));
+    if (agentBusy) return fail(new Error('Wait for deployment to finish before adding an account.'));
     try { return ok({ account: await auth.addAccount(options) }); } catch (e) { return fail(e); }
   });
   ipcMain.handle('auth:setMethod', async (_event, method) => {
-    if (agentBusy) return fail(new Error('Wait for the deployment agent to finish before changing sign-in method.'));
+    if (agentBusy) return fail(new Error('Wait for deployment to finish before changing sign-in method.'));
     try { return await auth.setSignInMethod(method); } catch (e) { return fail(e); }
   });
-  ipcMain.handle('auth:setActive', (_e, id) => agentBusy ? fail(new Error('Wait for the deployment agent to finish before switching accounts.')) : auth.setActive(id));
-  ipcMain.handle('auth:signOut', (_e, id) => agentBusy ? fail(new Error('Wait for the deployment agent to finish before signing out.')) : auth.signOut(id));
+  ipcMain.handle('auth:setActive', (_e, id) => agentBusy ? fail(new Error('Wait for deployment to finish before switching accounts.')) : auth.setActive(id));
+  ipcMain.handle('auth:signOut', (_e, id) => agentBusy ? fail(new Error('Wait for deployment to finish before signing out.')) : auth.signOut(id));
   ipcMain.handle('auth:cancel', () => auth.cancelSignIn());
 
   // --- Environments / solutions ---
@@ -201,6 +209,38 @@ function registerIpc() {
   ipcMain.handle('solution:list', async (_e, orgUrl) => {
     try { return await dataverse.listSolutions(orgUrl); } catch (e) { return fail(e); }
   });
+
+  // Local definitions are common to Microsoft accounts using this OS library.
+  const libraryFolder = () => store.getSettings().packageLibraryFolder;
+  const libraryAction = action => async (_event, payload) => {
+    try {
+      if (agentBusy) throw new Error('Wait for deployment to finish before changing or loading packages.');
+      const { account } = await auth.status();
+      if (!account) throw new Error('Sign in to use predefined packages.');
+      if (agentBusy) throw new Error('Wait for deployment to finish before changing or loading packages.');
+      return ok(await action(payload, account));
+    } catch (error) { return fail(error); }
+  };
+  ipcMain.handle('packages:list', libraryAction(() => packageLibrary.list(libraryFolder())));
+  ipcMain.handle('packages:save', libraryAction(draft => packageLibrary.save(libraryFolder(), draft)));
+  ipcMain.handle('packages:remove', libraryAction(reference => packageLibrary.remove(libraryFolder(), reference)));
+  ipcMain.handle('packages:load', libraryAction(async (reference, account) => {
+    if (reference.accountId !== account.homeAccountId) throw new Error('Your account changed. Select the package again.');
+    const recipe = await packageLibrary.get(libraryFolder(), reference);
+    // Editing remains possible when a referenced ZIP has moved or changed.
+    // Saving and deploying still verify the actual files.
+    if (reference.edit === true && recipe.mode === 'file') return { package: recipe, items: recipe.items, solutions: [] };
+    return dataverse.withAccount(account.homeAccountId, () => packageLibrary.resolve(recipe, dataverse));
+  }));
+  ipcMain.handle('packages:chooseFolder', libraryAction(async () => {
+    const result = await dialog.showOpenDialog(win, { title: 'Choose package library folder', properties: ['openDirectory'] });
+    if (result.canceled || !result.filePaths[0]) return { canceled: true };
+    if (agentBusy) throw new Error('Wait for deployment to finish before changing the package library folder.');
+    const location = await packageLibrary.folder(result.filePaths[0]);
+    if (agentBusy) throw new Error('Wait for deployment to finish before changing the package library folder.');
+    store.saveSettings({ packageLibraryFolder: location });
+    return { folder: location };
+  }));
 
   // --- Settings & storage ---
   ipcMain.handle('settings:get', () => store.getSettings());
@@ -217,6 +257,11 @@ function registerIpc() {
     try { return ok(await clientNames.save(value, account)); } catch (error) { return fail(error); }
   });
   ipcMain.handle('settings:save', async (_e, patch) => {
+    if (Object.prototype.hasOwnProperty.call(patch, 'packageLibraryFolder')) {
+      if (agentBusy) throw new Error('Wait for deployment to finish before changing the package library folder.');
+      patch = { ...patch, packageLibraryFolder: await packageLibrary.folder(patch.packageLibraryFolder) };
+      if (agentBusy) throw new Error('Wait for deployment to finish before changing the package library folder.');
+    }
     if (patch.teamsNotifications) teamsNotifications.assertReady(patch.teamsNotifications);
     const settings = store.saveSettings(patch);
     if (Object.prototype.hasOwnProperty.call(patch, 'teamsNotifications')) {
@@ -231,7 +276,7 @@ function registerIpc() {
     return settings;
   });
   ipcMain.handle('teams:connect', async (_event, expectedTransport) => {
-    if (agentBusy) return fail(new Error('Wait for the deployment agent to finish before connecting Teams.'));
+    if (agentBusy) return fail(new Error('Wait for deployment to finish before connecting Teams.'));
     try { return await teamsNotifications.connect(expectedTransport); } catch (error) { return fail(error); }
   });
   ipcMain.handle('teams:checkWorkflow', () => {
@@ -300,18 +345,20 @@ function registerIpc() {
   });
 
   // --- Pick a prebuilt solution package (.zip) and inspect it ---
-  ipcMain.handle('dialog:pickZip', async () => {
+  ipcMain.handle('dialog:pickZip', async (_event, options) => {
     const r = await dialog.showOpenDialog(win, {
-      properties: ['openFile'],
+      properties: options?.multiple === true ? ['openFile', 'multiSelections'] : ['openFile'],
       filters: [{ name: 'Solution package', extensions: ['zip'] }]
     });
     if (r.canceled || !r.filePaths[0]) return { ok: false };
-    return { ok: true, path: r.filePaths[0] };
+    return { ok: true, path: r.filePaths[0], paths: r.filePaths };
   });
   ipcMain.handle('deploy:inspectFile', async (_e, { filePath }) => {
     try {
-      const inspection = zip.inspect(filePath);
-      return ok({ artifact: filePath, inspection, stored: { storage: 'local', storedPath: filePath } });
+      const bytes = fs.readFileSync(filePath);
+      const inspection = zip.inspect(bytes);
+      const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
+      return ok({ artifact: filePath, inspection, sha256, stored: { storage: 'local', storedPath: filePath } });
     } catch (e) {
       return fail(e);
     }
@@ -330,11 +377,14 @@ function registerIpc() {
   ipcMain.handle('history:list', () => store.listDeployments());
   ipcMain.handle('history:query', (_e, options) => store.queryDeployments(options));
   ipcMain.handle('history:matchingIds', (_e, filters) => store.matchingDeploymentIds(filters));
-  ipcMain.handle('history:get', (_e, id) => store.getDeployment(id));
-  ipcMain.handle('history:delete', (_e, ids) => store.deleteDeployments(Array.isArray(ids) ? ids : []));
+  ipcMain.handle('history:get', (_e, id) => store.getHistoryEntry(id));
+  ipcMain.handle('history:delete', (_e, ids) => {
+    if (agentBusy) throw new Error('Wait for the active deployment to finish before deleting history.');
+    return store.deleteDeployments(Array.isArray(ids) ? ids : []);
+  });
   ipcMain.handle('history:export', async (_e, ids, format) => {
     try {
-      const records = store.listDeployments().filter((item) => Array.isArray(ids) && ids.includes(item.id));
+      const { records, count } = store.exportHistoryRecords(Array.isArray(ids) ? ids : []);
       if (!records.length) throw new Error('There are no history records to export.');
       const type = format === 'csv' ? 'csv' : 'json';
       const result = await dialog.showSaveDialog(win, {
@@ -346,7 +396,7 @@ function registerIpc() {
       let output;
       if (type === 'json') output = JSON.stringify(records, null, 2);
       else {
-        const columns = ['createdAt', 'solution', 'solutionUniqueName', 'version', 'sourceEnv', 'sourceUrl', 'targetEnv', 'targetUrl', 'status', 'deploymentMethod', 'agent', 'account', 'exportManaged', 'workItems', 'workItemSummary', 'workItemDetails', 'description', 'notes', 'dependencies', 'artifact', 'stored', 'warning', 'error'];
+        const columns = ['createdAt', 'solution', 'solutionUniqueName', 'version', 'sourceEnv', 'sourceUrl', 'targetEnv', 'targetUrl', 'status', 'deploymentMethod', 'agent', 'account', 'exportManaged', 'workItems', 'workItemSummary', 'workItemDetails', 'description', 'notes', 'dependencies', 'artifact', 'stored', 'warning', 'error', 'queueId', 'queueIndex', 'queueCount', 'queueCreatedAt', 'queueFinishedAt', 'queueStatus', 'queueWarning', 'startedAt', 'finishedAt', 'historyRecorded', 'importCompleted', 'importJobId', 'phase', 'package'];
         const cell = (value) => {
           let text = typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value ?? '');
           if (/^\s*[=+@-]/.test(text)) text = "'" + text;
@@ -355,7 +405,7 @@ function registerIpc() {
         output = '\uFEFF' + [columns.join(','), ...records.map((record) => columns.map((name) => cell(record[name])).join(','))].join('\r\n');
       }
       fs.writeFileSync(result.filePath, output, 'utf8');
-      return ok({ path: result.filePath, count: records.length });
+      return ok({ path: result.filePath, count, solutionCount: records.length });
     } catch (e) { return fail(e); }
   });
 
@@ -372,13 +422,13 @@ function registerIpc() {
   ipcMain.handle('artifacts:dir', () => store.artifactsDir());
 
   // === Export from source (optional version bump) + inspect + store ===
-  ipcMain.handle('deploy:export', deploymentHandler(async (_e, params) => {
-    if (agentBusy) return fail(new Error('A deployment agent is already running.'));
+  const exportDeployment = async params => {
     const { sourceEnvUrl, sourceEnvName, targetEnvName, account, solutionId, solutionName, newVersion, exportManaged } = params;
     const current = await auth.status().catch(() => ({}));
     const snapshot = { runId: crypto.randomUUID(), accountId: current.account?.homeAccountId,
       account: current.account?.username, sourceEnv: sourceEnvName, targetEnv: targetEnvName,
-      solutionUniqueName: solutionName, version: newVersion, exportManaged, phase: 'export' };
+      solutionUniqueName: solutionName, version: newVersion, exportManaged, phase: 'export',
+      queueIndex: params.queueIndex, queueCount: params.queueCount };
     teamsNotifications.start(snapshot);
     const report = (...args) => { stage(...args); teamsNotifications.update(snapshot.runId, ...args); };
     try {
@@ -419,12 +469,11 @@ function registerIpc() {
       notifyDeployment('Export stopped', e.message);
       return { ...fail(e), teams: teamsNotifications.finish(snapshot.runId, { ok: false, error: e.message }) };
     }
-  }));
+  };
+  ipcMain.handle('deploy:export', exclusiveDeployment(exportDeployment));
 
   // === Bounded agent deployment from a source solution ===
-  ipcMain.handle('deploy:agent', deploymentHandler(async (_e, params) => {
-    if (agentBusy) return fail(new Error('A deployment agent is already running.'));
-    agentBusy = true;
+  const agentDeployment = async params => {
     let snapshot;
     const report = (...args) => { stage(...args); if (snapshot) teamsNotifications.update(snapshot.runId, ...args); };
     try {
@@ -485,19 +534,20 @@ function registerIpc() {
       const teams = snapshot ? teamsNotifications.finish(snapshot.runId, { ok: false, error: error.message }) : null;
       if (snapshot) await deploymentAutomation.recordOutcome(snapshot, { ok: false, error: error.message }).catch(() => {});
       return { ...fail(error), teams };
-    } finally { agentBusy = false; }
-  }));
+    }
+  };
+  ipcMain.handle('deploy:agent', exclusiveDeployment(agentDeployment));
 
   // === Import into target (async, real progress) + optional publish ===
-  ipcMain.handle('deploy:import', deploymentHandler(async (_e, params) => {
-    if (agentBusy) return fail(new Error('A deployment agent is already running.'));
+  const importDeployment = async params => {
     const { targetEnvUrl, targetEnvName, solutionName, artifact, overwrite, publishChanges, exportManaged } = params;
     const current = await auth.status().catch(() => ({}));
     const snapshot = { runId: crypto.randomUUID(), accountId: current.account?.homeAccountId,
       account: current.account?.username, sourceUrl: params.sourceEnvUrl || '', sourceEnv: params.sourceEnvName || 'Package file',
       targetUrl: targetEnvUrl, targetEnv: targetEnvName, solutionUniqueName: params.solutionUniqueName || solutionName,
       solution: solutionName, version: params.version, exportManaged, overwrite, publishChanges,
-      deploymentMethod: 'import', description: params.description, notes: params.notes };
+      deploymentMethod: 'import', description: params.description, notes: params.notes,
+      queueIndex: params.queueIndex, queueCount: params.queueCount };
     snapshot.deploymentAutomation = automationSettings(store.getSettings().deploymentAutomation);
     const teamsChoice = store.getSettings().teamsNotifications;
     teamsNotifications.start(snapshot, teamsChoice);
@@ -505,7 +555,7 @@ function registerIpc() {
     try {
       report('import', 'running', 1, 'Starting import…');
       const r = await dataverse.importSolutionFromFile(
-        targetEnvUrl, artifact, { overwrite, publishWorkflows: true },
+        targetEnvUrl, artifact, { overwrite, publishWorkflows: true, expectedSha256: params.expectedSha256 },
         (pct, msg) => report('import', 'running', pct, msg)
       );
       if (!r.ok) {
@@ -545,7 +595,98 @@ function registerIpc() {
       await deploymentAutomation.recordOutcome(snapshot, { ok: false, error: e.message }).catch(() => {});
       return { ...fail(e), teams, teamsNotifications: teamsChoice };
     }
-  }));
+  };
+  ipcMain.handle('deploy:import', exclusiveDeployment(importDeployment));
+
+  // One captured account, route and ordered list for the entire queue.
+  const queueAction = async (params, prepare) => {
+    const { account } = await auth.status();
+    if (!account || account.homeAccountId !== params.accountId) throw new Error('The active Microsoft account changed. Review the queue again.');
+    const snapshot = structuredClone(params);
+    await packageLibrary.verifyQueue(libraryFolder(), snapshot);
+    const historyWarnings = new Set();
+    const updateQueueHistory = (queueId, index, patch) => {
+      try { store.updateDeploymentQueue(queueId, index, patch); }
+      catch (error) { historyWarnings.add('Queue history could not be updated: ' + error.message); }
+    };
+    const checkAccount = async () => {
+      const { account: currentAccount } = await auth.status();
+      if (currentAccount?.homeAccountId !== snapshot.accountId) throw new Error('The deployment account changed. Queue stopped.');
+    };
+    const onItem = (index, status, message, queueId) => {
+      if (queueId) {
+        const now = new Date().toISOString();
+        updateQueueHistory(queueId, index, {
+          status: status === 'done' ? 'success' : status === 'error' ? 'failed' : status,
+          ...(status === 'running' ? { startedAt: now } : { finishedAt: now }),
+          ...(status === 'error' || status === 'skipped' ? { error: message } : {})
+        });
+      }
+      if (win && !win.isDestroyed()) win.webContents.send('deploy:queueProgress', { requestId: snapshot.requestId, queueId, index, status, message });
+    };
+    const services = { dataverse, zip, checkAccount, onItem,
+      // If the initial history write fails, stop before any import is submitted.
+      onStart: queue => store.startDeploymentQueue(queue, account.username),
+      onResult: (queue, index, result) => updateQueueHistory(queue.queueId, index, {
+        status: result.ok ? 'success' : 'failed', error: result.error || null,
+        warning: result.warning || null, recordId: result.record?.id,
+        importCompleted: result.importCompleted, importJobId: result.importJobId,
+        phase: result.phase, runId: result.runId
+      }),
+      exportItem: (queue, item, index) => exportDeployment({ sourceEnvUrl: queue.sourceUrl, sourceEnvName: queue.sourceEnv,
+        targetEnvName: queue.targetEnv, account: account.username, solutionId: item.solutionId,
+        solutionName: item.solutionUniqueName, newVersion: item.version, exportManaged: queue.exportManaged,
+        queueIndex: index, queueCount: queue.items.length }),
+      runItem: async (queue, item, index) => {
+        const detail = { ...queue, ...item, items: undefined, account: account.username,
+          queueId: queue.queueId, queueIndex: index, queueCount: queue.items.length,
+          deferExport: !item.analysis, analysis: item.analysis };
+        if (queue.mode === 'source' && queue.useAgent) return agentDeployment(detail);
+        const result = await importDeployment({ targetEnvUrl: queue.targetUrl, targetEnvName: queue.targetEnv,
+          sourceEnvUrl: queue.sourceUrl || '', sourceEnvName: queue.sourceEnv || 'Package file',
+          solutionName: item.solution || item.solutionUniqueName, solutionUniqueName: item.solutionUniqueName,
+          artifact: item.analysis.artifact, version: item.version, overwrite: queue.overwrite,
+          expectedSha256: queue.package?.mode === 'file' ? item.sha256 : undefined,
+          publishChanges: queue.publishChanges, exportManaged: item.exportManaged ?? queue.exportManaged,
+          description: queue.description, notes: queue.notes,
+          queueIndex: index, queueCount: queue.items.length });
+        let warning = result.warning || '';
+        let record;
+        try {
+          record = await saveDeploymentRecord({ solution: item.solution || item.solutionUniqueName,
+            solutionUniqueName: item.solutionUniqueName, version: item.version,
+            sourceEnv: queue.sourceEnv || 'Package file', sourceUrl: queue.sourceUrl || '',
+            targetEnv: queue.targetEnv, targetUrl: queue.targetUrl, account: account.username,
+            description: queue.description, workItems: queue.workItems, workItemDetails: queue.workItemDetails,
+            workItemSummary: queue.workItemSummary, notes: queue.notes, mode: queue.mode,
+            exportManaged: item.exportManaged ?? queue.exportManaged, deploymentMethod: 'queue',
+            queueId: queue.queueId, queueIndex: index, queueCount: queue.items.length,
+            package: queue.package,
+            artifact: item.analysis.artifact, stored: item.analysis.stored,
+            dependencies: item.analysis.inspection.dependencies, summary: item.analysis.inspection.summary,
+            status: result.ok ? 'success' : 'failed', error: result.ok ? null : result.error,
+            importCompleted: result.importCompleted, importJobId: result.importJobId, phase: result.phase,
+            warning: [warning, item.analysis.stored?.warning].filter(Boolean).join(' '),
+            runId: result.runId, reporting: result.reporting, teams: result.teams, teamsNotifications: result.teamsNotifications });
+        } catch (error) { warning = [warning, 'Deployment history could not be saved: ' + error.message].filter(Boolean).join(' '); }
+        if (queue.gitCommit) {
+          try { await git.ensureRepo(store.artifactsDir()); await git.commitAll(store.artifactsDir(), 'Deploy ' + item.solutionUniqueName + ' v' + item.version + ' -> ' + queue.targetEnv); }
+          catch (error) { warning = [warning, 'Git commit failed: ' + error.message].filter(Boolean).join(' '); }
+        }
+        return { ...result, warning, record };
+      }
+    };
+    return dataverse.withAccount(snapshot.accountId, async () => {
+      if (prepare) return deploymentQueue.prepareQueue(snapshot, services);
+      const result = await deploymentQueue.runQueue(snapshot, services);
+      updateQueueHistory(result.queueId, null, { status: result.ok ? 'success' : 'failed',
+        finishedAt: new Date().toISOString(), error: result.error || null,
+        warning: [...historyWarnings].join(' ') });
+      return { ...result, ...(historyWarnings.size ? { warning: [...historyWarnings].join(' ') } : {}) };
+    });
+  };
+  ipcMain.handle('deploy:prepareQueue', exclusiveDeployment(params => queueAction(params, true)));
+  ipcMain.handle('deploy:queue', exclusiveDeployment(params => queueAction(params, false)));
 
   // === Persist a deployment record + write notes file ===
   ipcMain.handle('deploy:record', async (_e, record) => {

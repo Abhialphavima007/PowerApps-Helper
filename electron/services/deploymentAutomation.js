@@ -263,7 +263,8 @@ function createDeploymentAutomation({ auth, getSettings, userDataPath, notify = 
         categories[item.id] = process.category;
       } catch { /* Keep the verified generic Process type. */ }
     }
-    body.abhi_details = redact(approvalDetails(plan, context.unresolved || [], categories), 30000);
+    body.abhi_details = redact(approvalDetails(plan, context.unresolved || [], categories,
+      context.error || '', context.dependencies || []), 30000);
     // Dataverse date columns can discard fractional seconds.
     const deadline = Math.floor((now() + row.timeout * 60000) / 1000) * 1000;
     body.abhi_expireson = new Date(deadline).toISOString();

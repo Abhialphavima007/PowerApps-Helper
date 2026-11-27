@@ -1,6 +1,10 @@
 # PowerApps Helper deployment automation
 
+Desktop release candidate **0.1.6**, prepared 27 November 2026, includes fresh managed/unmanaged **PowerAppsHelper 1.1.3.1** exports with approval presentation **1.1.4.0**. See the [complete Word setup guide](../docs/PowerApps-Helper-Setup-Guide.docx), [guide source](../docs/setup-guide.md) and [current release notes](../docs/releases/0.1.6.md). The guide explains the five flow connections, notification profile, permissions and desktop connection. The following paragraphs retain the earlier implementation history; their no-export/no-installer statements describe that earlier step.
+
 Solution revision **1.1.3.0**, 26 November 2026. Desktop release candidate **0.1.5** packages these changes; the earlier handover build used 0.1.4. See the [desktop release notes](../docs/releases/0.1.5.md), [new-user setup guide](../docs/local-handover.md) and [validation/recovery evidence](../docs/approval-usability-improvements.md).
+
+Approval presentation **1.1.4.0**, 27 November 2026, adds numbered bold headings, component bullets, dependency code blocks and ordered next steps. It is applied to the existing Abhinav Research development approval flow; exact definition readback matched, and the flow remains Activated with its existing trigger/connections. MCP verified the existing solution version **1.1.3.1**, which was retained; no new solution export or installer was produced. Desktop changes require an Electron restart. See [format and rollout notes](../docs/dependency-approval-format.md). The earlier publication notes below refer to 1.1.3.0.
 
 ## Current development state
 

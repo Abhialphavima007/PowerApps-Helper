@@ -19,11 +19,11 @@ test('approval lists names and friendly types first without changing the approve
     { name: 'Send\n*updates*', type: 29, id: otherId, includeSubcomponents: true }] };
   const before = JSON.stringify(plan);
   const details = approvalDetails(plan, [{ label: 'Unknown <component>' }], { [otherId]: 5 });
-  assert.match(details, /^COMPONENTS TO ADD.*\n- new_orders — Table\n- Send updates — Cloud flow/);
+  assert.match(details, /^\*\*2\. Components to add.*\n\n- \*\*Table:\*\* `new_orders`\n- \*\*Cloud flow:\*\* `Send updates`/);
   assert.match(details, /Unknown component/);
-  assert.ok(details.indexOf('AFTER APPROVAL') < details.indexOf('TECHNICAL COMPONENT REFERENCES'));
+  assert.ok(details.indexOf('4. After approval') < details.indexOf('TECHNICAL COMPONENT REFERENCES'));
   assert.equal(JSON.stringify(plan), before);
-  assert.match(approvalDetails({ components: [{ type: 999, id }] }), /Unnamed component — Component \(type 999\)/);
+  assert.match(approvalDetails({ components: [{ type: 999, id }] }), /\*\*Component \(type 999\):\*\* `Unnamed component`/);
 });
 
 test('process category determines workflow, business rule, action and flow names with a safe fallback', () => {
@@ -83,7 +83,7 @@ test('approval service labels source process categories and preserves the exact 
     });
     const before = JSON.stringify(candidates);
     const approved = await service.requestApproval(snapshot,candidates,{cycle:1,error:'Reported dependency issue',unresolved:[]});
-    assert.match(event.abhi_details, failLookup ? /Notify_customers — Process/ : /Notify_customers — Cloud flow/);
+    assert.match(event.abhi_details, failLookup ? /\*\*Process:\*\* `Notify_customers`/ : /\*\*Cloud flow:\*\* `Notify_customers`/);
     assert.equal(event.abhi_planjson,JSON.stringify(repairPlan(snapshot,candidates,1)));
     assert.equal(event.abhi_planhash,planHash(repairPlan(snapshot,candidates,1)));
     assert.equal(JSON.stringify(candidates),before);
@@ -159,7 +159,7 @@ test('presentation patch changes only two approval titles/details and reminder c
   assert.match(detailsExpression, /first\(split/);
   assert.doesNotMatch(detailsExpression, /abhi_planjson/);
   const text = JSON.stringify(actions.Teams_approval_card.inputs);
-  assert.ok(text.indexOf('first(split') < text.indexOf('Reported dependency error'));
+  assert.ok(text.indexOf('first(split') < text.indexOf('5. Reported dependency error'));
   for (const change of [flow => { delete flow.properties.definition.actions.Process_dependency_approval; },
     flow => { flow.properties.definition.triggers.When_deployment_event_is_created.inputs.parameters['subscriptionRequest/runas'] = 2; }]) {
     const invalid = approvalFixture(); change(invalid);

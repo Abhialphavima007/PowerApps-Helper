@@ -5,13 +5,28 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { AsyncLocalStorage } = require('async_hooks');
 const auth = require('./auth');
 const solutionZip = require('./solutionZip');
+const installation = require('./installationWait');
+const deploymentAccount = new AsyncLocalStorage();
 
 const API_VERSION = 'v9.2';
+// v1.2.0 — independent per-import budgets; background readiness stays at 15 minutes.
+const IMPORT_WAIT_MS = 60 * 60 * 1000;
+const MANAGED_UPDATE_WAIT_MS = 3 * 60 * 60 * 1000;
 
-async function request(orgUrl, relPath, { method = 'GET', body, resource, raw } = {}) {
-  const token = await auth.getToken(resource || orgUrl);
+async function request(orgUrl, relPath, { method = 'GET', body, resource, raw, timeoutMs } = {}) {
+  const accountId = deploymentAccount.getStore();
+  let token;
+  try {
+    token = accountId ? await auth.getTokenSilent(resource || orgUrl, accountId) : await auth.getToken(resource || orgUrl);
+  } catch (error) {
+    if (!accountId) throw error;
+    const sessionError = new Error('The deployment account no longer has a valid Microsoft session for this environment. Reconnect the account, then review the queue.');
+    sessionError.phase = 'authentication';
+    throw sessionError;
+  }
   const url = orgUrl.replace(/\/+$/, '') + relPath;
   const res = await fetch(url, {
     method,
@@ -22,7 +37,8 @@ async function request(orgUrl, relPath, { method = 'GET', body, resource, raw } 
       'OData-MaxVersion': '4.0',
       'OData-Version': '4.0'
     },
-    body: body !== undefined ? JSON.stringify(body) : undefined
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+    ...(timeoutMs ? { signal: AbortSignal.timeout(Math.max(1, timeoutMs)) } : {})
   });
   const text = await res.text();
   if (!res.ok) {
@@ -230,8 +246,50 @@ async function importFailure(orgUrl, importJobId, error, asyncOperationId = null
   };
 }
 
-async function importSolutionFromFile(orgUrl, file, { overwrite = true, publishWorkflows = true } = {}, onProgress) {
-  const b64 = fs.readFileSync(file).toString('base64');
+async function importWaitPolicy(orgUrl, bytes) {
+  // Inspect the same bytes that will be submitted, never a display name or filename.
+  const inspection = solutionZip.inspect(bytes);
+  if (!/^[A-Za-z][A-Za-z0-9_]{0,99}$/.test(inspection.uniqueName || '')) {
+    throw new Error('The selected ZIP does not contain a valid solution unique name. Review the package before importing.');
+  }
+  if (!inspection.managed) return { importKind: 'standard', timeoutMs: IMPORT_WAIT_MS };
+
+  const filter = encodeURIComponent(`uniquename eq '${inspection.uniqueName}'`);
+  const data = await request(orgUrl,
+    `/api/data/${API_VERSION}/solutions?$select=uniquename,ismanaged&$filter=${filter}&$top=2`,
+    { timeoutMs: 30000 });
+  if (!Array.isArray(data.value) || data.value.length > 1 || data['@odata.nextLink'] ||
+      data.value.some(solution => typeof solution.ismanaged !== 'boolean' ||
+        typeof solution.uniquename !== 'string' ||
+        solution.uniquename.toLowerCase() !== inspection.uniqueName.toLowerCase())) {
+    throw new Error('Could not verify whether this managed solution is already installed. Check target solution access before retrying.');
+  }
+  // An existing managed solution gets the conservative update/upgrade wait.
+  // This does not change ImportSolutionAsync into a stage/apply-upgrade action.
+  return data.value[0]?.ismanaged
+    ? { importKind: 'managedUpdate', timeoutMs: MANAGED_UPDATE_WAIT_MS }
+    : { importKind: 'standard', timeoutMs: IMPORT_WAIT_MS };
+}
+
+async function importOnce(orgUrl, file, { overwrite = true, publishWorkflows = true, expectedSha256 } = {}, onProgress) {
+  let bytes;
+  try { bytes = fs.readFileSync(file); }
+  catch (error) {
+    if (expectedSha256 === undefined) throw error;
+    const artifactError = new Error('The saved package ZIP is no longer readable. Reselect it and save the package again.');
+    artifactError.phase = 'artifact';
+    throw artifactError;
+  }
+  // Verify the exact bytes submitted, including after background-installation waits/retries.
+  if (expectedSha256 !== undefined && (!/^[0-9a-f]{64}$/.test(expectedSha256) ||
+      crypto.createHash('sha256').update(bytes).digest('hex') !== expectedSha256)) {
+    const error = new Error('The saved package ZIP changed before import. Reselect it, review it and save the package again.');
+    error.phase = 'artifact';
+    throw error;
+  }
+  const policy = await importWaitPolicy(orgUrl, bytes);
+  const waitDetails = { importKind: policy.importKind, importTimeoutMinutes: policy.timeoutMs / 60000 };
+  const b64 = bytes.toString('base64');
   const importJobId = crypto.randomUUID();
   const body = {
     OverwriteUnmanagedCustomizations: !!overwrite,
@@ -240,63 +298,170 @@ async function importSolutionFromFile(orgUrl, file, { overwrite = true, publishW
     ImportJobId: importJobId
   };
   const report = (pct, msg) => { if (onProgress) onProgress(pct, msg); };
+  const timedOut = asyncOperationId => ({ ok: false, phase: 'importTimeout',
+    error: `Import monitoring reached its ${waitDetails.importTimeoutMinutes}-minute limit. Microsoft may still be importing this solution. Check the target solution history and System Jobs before retrying; remaining queue items were not started.`,
+    importJobId, asyncOperationId, ...waitDetails });
+  const rejected = error => {
+    if (error.phase === 'authentication') throw error;
+    // Only an HTTP rejection of the submission can be retried for concurrent
+    // installation. A failed accepted job may already have applied changes.
+    if (error.status && installation.isInstallationBusy(error.message)) {
+      return { ok: false, error: error.message, importJobId, importRejected: true, phase: 'installation' };
+    }
+    return importFailure(orgUrl, importJobId, error);
+  };
 
   // Prefer the async message; fall back to synchronous ImportSolution.
   let asyncOperationId = null;
   try {
+    report(null, policy.importKind === 'managedUpdate'
+      ? 'Managed solution already exists in the target. Waiting up to 3 hours for this update import; Microsoft installation is checked separately.'
+      : 'Waiting up to 1 hour for this solution import; Microsoft installation is checked separately.');
     report(2, 'Uploading package & queueing import…');
     const r = await request(orgUrl, `/api/data/${API_VERSION}/ImportSolutionAsync`, { method: 'POST', body });
     asyncOperationId = r.AsyncOperationId || r.asyncoperationid;
   } catch (e) {
     if (e.status === 404) {
       report(null, 'Async import unavailable; importing synchronously (this can take a while)…');
-      try { await request(orgUrl, `/api/data/${API_VERSION}/ImportSolution`, { method: 'POST', body }); }
-      catch (error) { return importFailure(orgUrl, importJobId, error); }
+      try { await request(orgUrl, `/api/data/${API_VERSION}/ImportSolution`, { method: 'POST', body, timeoutMs: policy.timeoutMs }); }
+      catch (error) {
+        if (error.name === 'TimeoutError' || error.name === 'AbortError') return timedOut(null);
+        return rejected(error);
+      }
       report(100, 'Import completed.');
-      return { ok: true, importJobId };
+      return { ok: true, importJobId, ...waitDetails };
     }
-    return importFailure(orgUrl, importJobId, e);
+    return rejected(e);
   }
-
-  if (!asyncOperationId) { report(100, 'Import submitted.'); return { ok: true, importJobId }; }
 
   // Adaptive polling: quick at first for snappy feedback, then back off.
   const started = Date.now();
-  const timeoutMs = 20 * 60 * 1000;
+  const timeoutMs = policy.timeoutMs;
+  const remainingMs = () => Math.max(0, timeoutMs - (Date.now() - started));
   let delay = 1200;
   let lastPct = 2;
   while (Date.now() - started < timeoutMs) {
-    await sleep(delay);
+    await sleep(Math.min(delay, remainingMs()));
+    if (!remainingMs()) break;
     delay = Math.min(delay + 800, 4000);
 
     // Real progress percentage from the import job (may 404 until it exists).
     try {
-      const job = await request(orgUrl, `/api/data/${API_VERSION}/importjobs(${importJobId})?$select=progress`);
+      const fields = asyncOperationId ? 'progress' : 'progress,completedon,data';
+      const job = await request(orgUrl, `/api/data/${API_VERSION}/importjobs(${importJobId})?$select=${fields}`, { timeoutMs: Math.min(30000, remainingMs()) });
+      if (!remainingMs()) break;
       if (typeof job.progress === 'number' && job.progress > lastPct) {
         lastPct = Math.min(99, Math.round(job.progress));
         report(lastPct, `Importing… ${lastPct}%`);
       }
-    } catch { /* job not visible yet */ }
+      // Missing async-operation IDs are not proof of completion. Use the import
+      // job's terminal timestamp and explicit result instead of advancing early.
+      if (!asyncOperationId && job.completedon && typeof job.data === 'string') {
+        if (/\bresult\s*=\s*["'](?:failure|error)["']/i.test(job.data)) {
+          return importFailure(orgUrl, importJobId, job.data);
+        }
+        if (job.progress === 100 && /\bresult\s*=\s*["']success["']/i.test(job.data)) {
+          return { ok: true, importJobId, ...waitDetails };
+        }
+      }
+    } catch (error) {
+      if ([401, 403].includes(error.status) || /Microsoft session/.test(error.message)) throw error;
+    }
+
+    if (!asyncOperationId) continue;
+    if (!remainingMs()) break;
 
     // Completion state from the async operation.
     let op;
     try {
       op = await request(
         orgUrl,
-        `/api/data/${API_VERSION}/asyncoperations(${asyncOperationId})?$select=statecode,statuscode,message,friendlymessage`
+        `/api/data/${API_VERSION}/asyncoperations(${asyncOperationId})?$select=statecode,statuscode,message,friendlymessage`,
+        { timeoutMs: Math.min(30000, remainingMs()) }
       );
-    } catch {
+      if (!remainingMs()) break;
+    } catch (error) {
+      if ([401, 403].includes(error.status) || /Microsoft session/.test(error.message)) throw error;
       continue;
     }
     if (op.statecode === 3) {
       if (op.statuscode === 30) {
         report(100, 'Import completed.');
-        return { ok: true, importJobId, asyncOperationId };
+        return { ok: true, importJobId, asyncOperationId, ...waitDetails };
       }
       return importFailure(orgUrl, importJobId, op.friendlymessage || op.message || 'Import failed', asyncOperationId);
     }
   }
-  return { ok: false, error: 'Import timed out while waiting for completion.', importJobId, asyncOperationId };
+  return timedOut(asyncOperationId);
+}
+
+async function waitForInstallation(orgUrl, onProgress, options = {}) {
+  const ownOperationId = options.excludeAsyncOperationId;
+  if (ownOperationId && !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(ownOperationId)) {
+    throw new Error('The import returned an invalid system-job reference. Check the target before retrying.');
+  }
+  return installation.waitForInstallation({
+    ...options,
+    report: message => onProgress?.(null, message),
+    readActive: async timeoutMs => {
+      // solutionhistories can reject external callers with Microsoft's restricted-
+      // publisher API error. Read documented background system jobs instead:
+      // Ribbon Client Metadata (76), Import Solution Metadata (93), and solution
+      // installation after app updates (337). Ordinary custom-solution imports,
+      // publishes, upgrades and uninstalls do not enter this background wait.
+      // Job names/types do not prove the publisher of an individual solution.
+      // statecode=3 is terminal (success, failure or cancellation).
+      // https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/asyncoperation
+      const types = [76, 93, 337];
+      const filter = types.map(type => `operationtype eq ${type}`).join(' or ');
+      const excludeOwn = ownOperationId ? ` and asyncoperationid ne ${ownOperationId}` : '';
+      const data = await request(orgUrl,
+        `/api/data/${API_VERSION}/asyncoperations?$select=asyncoperationid,name,operationtype,startedon&$filter=statecode ne 3 and (${filter})${excludeOwn}&$top=50`,
+        { timeoutMs });
+      if (!Array.isArray(data.value)) throw new Error('Dataverse did not return a valid installation-status response.');
+      return data.value.map(job => ({ ...job, solutionname: job.name || 'Microsoft solution/ribbon installation' }));
+    }
+  });
+}
+
+async function importSolutionFromFile(orgUrl, file, options = {}, onProgress) {
+  // Start a conflict budget only when Microsoft rejects a concurrent submission.
+  // Upload/import duration does not consume the background-installation budget.
+  let conflictDeadline;
+  let lastResult;
+  let phase = 'installation';
+  try {
+    await waitForInstallation(orgUrl, onProgress);
+    while (true) {
+      if (conflictDeadline !== undefined && Date.now() >= conflictDeadline) {
+        await waitForInstallation(orgUrl, onProgress, { deadline: conflictDeadline });
+      }
+      phase = 'import';
+      lastResult = await importOnce(orgUrl, file, options, onProgress);
+      phase = 'installation';
+      if (!lastResult.ok && lastResult.importRejected && installation.isInstallationBusy(lastResult.error)) {
+        // The server rejected this operation before it could import. The next
+        // attempt uses a new job ID; repeated rejections share a 15-minute budget.
+        conflictDeadline ??= Date.now() + installation.MAX_WAIT_MS;
+        onProgress?.(null, 'Dataverse reports another solution/RibbonData operation is running. Waiting before retrying this solution…');
+        await sleep(Math.min(installation.CHECK_INTERVAL_MS, Math.max(0, conflictDeadline - Date.now())));
+        await waitForInstallation(orgUrl, onProgress, { settle: true, deadline: conflictDeadline });
+        continue;
+      }
+      if (!lastResult.ok) return lastResult;
+      await waitForInstallation(orgUrl, onProgress, { settle: true, excludeAsyncOperationId: lastResult.asyncOperationId });
+      onProgress?.(100, 'Import and Microsoft installation completed.');
+      return { ...lastResult, importCompleted: true };
+    }
+  } catch (error) {
+    return { ...lastResult, ok: false, error: error.message, phase: error.phase || phase,
+      importCompleted: !!lastResult?.ok };
+  }
+}
+
+function withAccount(accountId, action) {
+  if (!accountId) throw new Error('Sign in before starting the deployment queue.');
+  return deploymentAccount.run(accountId, action);
 }
 
 // ---- Publish ----
@@ -326,6 +491,8 @@ module.exports = {
   exportSolution,
   exportToFile,
   importSolutionFromFile,
+  waitForInstallation,
+  withAccount,
   publishAll,
   whoami
 };

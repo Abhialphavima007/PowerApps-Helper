@@ -1,5 +1,12 @@
 # Deployment automation changelog
 
+## Approval presentation 1.1.4 — 27 November 2026
+
+- Added six numbered sections with bold headings, component bullets, ordered repair steps, a dependency relationship code block and an XML error excerpt. Approval rule is derived from the event's selected mode. The original error and exact hashed repair plan remain in the Deployment Event.
+- Teams reminders separate dependency text into a supported Adaptive Card 1.2 Monospace block; native approval details use fenced Markdown. Old event details remain readable when a dependency block is absent.
+- Regenerated both approval definitions. After MCP reconnection, patched only the presentation fields in the freshly retrieved existing development approval flow. Exact full-definition readback matched revision 1.1.4.0; Activated state, connection bindings, trigger and decision guards were retained. Saved exact before/after recovery envelopes.
+- Recipients, profile, outcome definition and the existing solution version 1.1.3.1 remain unchanged. No approval notification, solution export, installer or release was produced. Restart Electron for the desktop dependency sections; already-issued approvals are not rewritten. Validation and remaining host checks are recorded in ../docs/dependency-approval-format.md.
+
 ## Deployment automation 1.1.3 — 26 November 2026
 
 - Cleaned approval requests/reminders: component names and friendly types first; dependency error below; exact plan and technical evidence retained in the event.

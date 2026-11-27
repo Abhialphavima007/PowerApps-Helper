@@ -5,7 +5,7 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
-const { detailsExpression } = require('./approval-presentation.cjs');
+const { detailsExpression, PRESENTATION_VERSION } = require('./approval-presentation.cjs');
 
 const DV = 'shared_commondataserviceforapps';
 const MAIL = 'shared_office365';
@@ -164,6 +164,7 @@ const approval = envelope('abhi_deliverystatus eq 100000000 and abhi_eventtype e
   }}
 }, [DV, APPROVALS]);
 
+approval.properties.definition.contentVersion = PRESENTATION_VERSION;
 for (const [name, definition] of [['deployment-outcome', outcome], ['dependency-approval', approval]]) {
   fs.writeFileSync(path.join(__dirname, name + '.json'), JSON.stringify(definition, null, 2) + '\n');
 }

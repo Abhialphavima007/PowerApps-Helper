@@ -219,6 +219,8 @@ function failure(error, attempts, repairs, analysis, lastImport) {
   return {
     ok: false, error: String(error?.message || error), attempts, repairs, analysis,
     importJobId: lastImport?.importJobId,
+    importCompleted: !!lastImport?.importCompleted,
+    phase: lastImport?.phase,
     dependencies: lastImport?.dependencies || [],
     importLog: lastImport?.importLog || ''
   };
@@ -244,6 +246,13 @@ function makeHistoryRecord(snapshot, result, accountUsername) {
     mode: 'source',
     deploymentMethod: 'agent',
     runId: snapshot.runId,
+    queueId: snapshot.queueId,
+    package: snapshot.package,
+    queueIndex: snapshot.queueIndex,
+    queueCount: snapshot.queueCount,
+    importJobId: result.importJobId,
+    importCompleted: result.importCompleted,
+    phase: result.phase,
     agent: {
       attempts: result.attempts || [], repairs: result.repairs || [],
       failedDependencies: result.dependencies?.length ? result.dependencies : failedAttempts.flatMap((attempt) => attempt.dependencies || []),
@@ -336,7 +345,12 @@ async function runAgentDeployment(snapshot, services) {
       }, (percent, message) => report('import', 'running', percent, message));
       attempts.push({
         number: cycle + 1, ok: !!lastImport.ok, importJobId: lastImport.importJobId || null,
+        asyncOperationId: lastImport.asyncOperationId || null,
+        importKind: lastImport.importKind,
+        importTimeoutMinutes: lastImport.importTimeoutMinutes,
         error: lastImport.ok ? null : lastImport.error,
+        importCompleted: lastImport.importCompleted,
+        phase: lastImport.phase,
         dependencies: lastImport.ok ? [] : (lastImport.dependencies || []),
         importLog: lastImport.ok ? '' : (lastImport.importLog || '')
       });
@@ -349,12 +363,15 @@ async function runAgentDeployment(snapshot, services) {
             report('publish', 'done', 100, 'Published.');
           } catch (error) {
             report('publish', 'error', null, 'Publish warning: ' + error.message);
-            return { ok: true, warning: [...storageWarnings, 'Import succeeded, but publishing failed: ' + error.message].join(' '), attempts, repairs, analysis, importJobId: lastImport.importJobId };
+            return { ok: true, importCompleted: true, warning: [...storageWarnings, 'Import succeeded, but publishing failed: ' + error.message].join(' '), attempts, repairs, analysis, importJobId: lastImport.importJobId };
           }
         }
-        return { ok: true, warning: storageWarnings.join(' '), attempts, repairs, analysis, importJobId: lastImport.importJobId };
+        return { ok: true, importCompleted: true, warning: storageWarnings.join(' '), attempts, repairs, analysis, importJobId: lastImport.importJobId };
       }
       report('import', 'error', null, lastImport.error || 'Import failed.');
+      if (lastImport.importCompleted || ['installation', 'authentication', 'importTimeout'].includes(lastImport.phase)) {
+        throw new Error(lastImport.error || 'Deployment stopped while waiting for Microsoft installation.');
+      }
       if (cycle === MAX_REPAIR_CYCLES) {
         throw new Error('Import still failed after ' + MAX_REPAIR_CYCLES + ' source repair cycles: ' + (lastImport.error || 'unknown error'));
       }
@@ -480,7 +497,8 @@ async function runAgentDeployment(snapshot, services) {
       // Source additions and retry side effects require approval of this exact cycle.
       if (!requestApproval) throw new Error('Dependency approval is not configured. The agent stopped before adding source dependencies.');
       const approval = await requestApproval(snapshot, candidates, {
-        cycle: cycle + 1, error: lastImport.error, importJobId: lastImport.importJobId, unresolved
+        cycle: cycle + 1, error: lastImport.error, importJobId: lastImport.importJobId,
+        dependencies: lastImport.dependencies, unresolved
       }, { report, checkAccount });
       if (!approval || typeof approval.assertValid !== 'function') throw new Error('The dependency approval could not be verified.');
       await approval.assertValid();

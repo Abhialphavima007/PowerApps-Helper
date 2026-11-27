@@ -83,7 +83,7 @@ export default function HistoryView() {
     try {
       const ids = await api.history.matchingIds(filters);
       const result = await api.history.export(ids, format);
-      if (result.ok) setMessage({ text: `Exported ${result.count} record${result.count === 1 ? '' : 's'} as ${format.toUpperCase()}.`, path: result.path });
+      if (result.ok) setMessage({ text: `Exported ${result.count} deployment${result.count === 1 ? '' : 's'} as ${format.toUpperCase()}${result.solutionCount > result.count ? `, including ${result.solutionCount} solution records` : ''}.`, path: result.path });
       else if (!result.canceled) setError(result.error || 'Could not export history.');
     } catch (e) { setError(String(e.message || e)); }
     finally { setExporting(false); }
@@ -92,13 +92,13 @@ export default function HistoryView() {
     setExporting(true);
     try {
       const ids = selectedIds || await api.history.matchingIds(filters);
-      if (!ids.length || !window.confirm(`Delete ${ids.length} history record${ids.length === 1 ? '' : 's'}? Exported solution packages and notes files will remain on disk.`)) return;
+      if (!ids.length || !window.confirm(`Delete ${ids.length} deployment${ids.length === 1 ? '' : 's'} from history, including all individual solution records in each selected queue? Exported solution packages and notes files will remain on disk.`)) return;
       setError(''); setMessage(null);
       const result = await api.history.delete(ids);
       detailRequest.current += 1;
       setDetailLoading(false); setSelected(null);
       load();
-      setMessage({ text: `Deleted ${result.deleted} history record${result.deleted === 1 ? '' : 's'}.` });
+      setMessage({ text: `Deleted ${result.deleted} deployment${result.deleted === 1 ? '' : 's'} from history.` });
     } catch (e) { setError(String(e.message || e)); }
     finally { setExporting(false); }
   };
@@ -108,7 +108,7 @@ export default function HistoryView() {
       <div className="toolbar history-heading">
         <div style={{ flex: 1 }}>
           <p className="h1" style={{ margin: 0 }}>Deployment history</p>
-          <p className="sub" style={{ margin: 0 }}>Every env-to-env deployment, with notes and dependencies.</p>
+          <p className="sub" style={{ margin: 0 }}>Each deployment appears once. Open a queue to see each solution’s details.</p>
         </div>
         <button className="btn small secondary" disabled={historyBusy || exporting} onClick={load}>Refresh</button>
       </div>
@@ -126,8 +126,9 @@ export default function HistoryView() {
           <div><label htmlFor="history-source">Source environment</label><select id="history-source" value={source} onChange={(event) => setSource(event.target.value)}><option value="">Any source</option>{sourceOptions.map((option) => <option key={option.id} value={option.id}>{option.label}{option.id !== option.label ? ` · ${option.id}` : ''}</option>)}</select></div>
           <div><label htmlFor="history-target">Target environment</label><select id="history-target" value={target} onChange={(event) => setTarget(event.target.value)}><option value="">Any target</option>{targetOptions.map((option) => <option key={option.id} value={option.id}>{option.label}{option.id !== option.label ? ` · ${option.id}` : ''}</option>)}</select></div>
           <div><label htmlFor="history-status">Status</label><select id="history-status" value={status} onChange={(event) => setStatus(event.target.value)}><option value="">Any status</option><option value="success">Success</option><option value="failed">Failed</option><option value="pending">Pending</option></select></div>
-          <div><label htmlFor="history-query">Solution or work item</label><input id="history-query" type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search history…" /></div>
+          <div><label htmlFor="history-query">Package, solution or work item</label><input id="history-query" type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search history…" /></div>
         </fieldset>
+        <p className="muted history-queue-caption">Status filters apply to the whole deployment. A solution match includes its complete queue in export and delete actions.</p>
         <div className="toolbar" style={{ marginTop: 14, marginBottom: 0 }}>
           <span className="muted" style={{ flex: 1 }}>{total} of {summary.total} deployments · Actions include all matching pages</span>
           <button className="btn small secondary" disabled={!total || exporting || historyBusy} onClick={() => exportItems('csv')}>Export CSV</button>
@@ -149,7 +150,7 @@ export default function HistoryView() {
             <thead>
               <tr>
                 <th>When</th>
-                <th>Solution</th>
+                <th>Deployment</th>
                 <th>Type</th>
                 <th>Version</th>
                 <th>Source → Target</th>
@@ -161,14 +162,13 @@ export default function HistoryView() {
               {items.map((d) => (
                 <tr key={d.id}>
                   <td className="muted">{new Date(d.createdAt).toLocaleString()}</td>
-                  <td>{d.solution} {d.deploymentMethod === 'agent' && <span className="pill ok">Agent</span>}</td>
-                  <td><span className={'pill ' + (d.exportManaged ? 'managed' : 'unmanaged')}>{d.exportManaged ? 'Managed' : 'Unmanaged'}</span></td>
-                  <td className="muted">{d.version}</td>
+                  <td>{d.kind === 'queue' ? d.package?.name || `${d.queueCount} solutions` : d.solution} {d.deploymentMethod === 'agent' && <span className="pill ok">Agent</span>}
+                    {d.kind === 'queue' && <div className="muted history-queue-caption">{d.completed} of {d.queueCount} completed</div>}</td>
+                  <td><span className={'pill ' + (d.mixedTypes ? 'muted' : d.exportManaged ? 'managed' : 'unmanaged')}>{d.mixedTypes ? 'Mixed' : d.exportManaged ? 'Managed' : 'Unmanaged'}</span></td>
+                  <td className="muted">{d.kind === 'queue' ? 'Per solution' : d.version}</td>
                   <td className="muted">{d.sourceEnv} → {d.targetEnv}</td>
                   <td>
-                    <span className={'pill ' + (d.status === 'success' ? 'ok' : d.status === 'failed' ? 'bad' : 'muted')}>
-                      {d.status}
-                    </span>
+                    <HistoryStatus status={d.status} />
                   </td>
                   <td className="history-row-actions"><button className="btn small secondary" disabled={historyBusy || detailLoading || exporting} onClick={(event) => openDetail(d.id, event.currentTarget)}>View</button>{' '}<button className="btn small danger" disabled={historyBusy || exporting} onClick={() => deleteItems([d.id])}>Delete</button></td>
                 </tr>
@@ -197,26 +197,90 @@ export default function HistoryView() {
 
 function Detail({ d, onClose, returnFocus }) {
   const dialogRef = useRef(null);
+  const titleRef = useRef(null);
+  const lastSolutionIndex = useRef(null);
+  const [solutionIndex, setSolutionIndex] = useState(null);
+  const solution = solutionIndex == null ? null : d.solutions?.[solutionIndex];
   useEffect(() => {
     const dialog = dialogRef.current;
     dialog.showModal();
     return () => { if (dialog.open) dialog.close(); returnFocus.current?.focus(); };
   }, []);
-  const deps = d.dependencies || [];
+  const openSolution = index => {
+    lastSolutionIndex.current = index;
+    setSolutionIndex(index);
+  };
+  useEffect(() => {
+    if (solutionIndex != null) titleRef.current?.focus();
+  }, [solutionIndex]);
   return (
     <dialog ref={dialogRef} className="history-dialog" aria-labelledby="history-detail-title" onCancel={(event) => { event.preventDefault(); onClose(); }}>
       <div className="history-dialog-head">
-        <div><span className="eyebrow">DEPLOYMENT DETAILS</span><h2 id="history-detail-title">{d.solution} · v{d.version}</h2></div>
+        <div><span className="eyebrow">{solution ? `SOLUTION ${solutionIndex + 1} OF ${d.queueCount}` : 'DEPLOYMENT DETAILS'}</span><h2 ref={titleRef} tabIndex={-1} id="history-detail-title">{solution ? `${solution.solution}${solution.version ? ` · v${solution.version}` : ''}` : d.kind === 'queue' ? `${d.package?.name || 'Deployment queue'} · ${d.queueCount} solutions` : `${d.solution} · v${d.version}`}</h2></div>
         <button className="btn small secondary" autoFocus onClick={onClose}>Close</button>
       </div>
       <div className="history-dialog-body">
+        {d.kind === 'queue' ? solution ? <>
+          <button className="btn small secondary history-back" onClick={() => setSolutionIndex(null)}>← All solutions</button>
+          <SolutionDetails d={solution} />
+        </> : <QueueDetails d={d} openSolution={openSolution} returnFocusIndex={lastSolutionIndex.current} /> : <SolutionDetails d={d} />}
+      </div>
+    </dialog>
+  );
+}
+
+function HistoryStatus({ status }) {
+  const labels = { success: 'Success', failed: 'Failed', pending: 'Pending', running: 'In progress', waiting: 'Waiting', skipped: 'Skipped', unrecorded: 'Not recorded' };
+  return <span className={'pill ' + (status === 'success' ? 'ok' : status === 'failed' ? 'bad' : 'muted')}>{labels[status] || status}</span>;
+}
+
+function QueueDetails({ d, openSolution, returnFocusIndex }) {
+  const buttons = useRef([]);
+  useEffect(() => {
+    if (returnFocusIndex != null) buttons.current[returnFocusIndex]?.focus();
+  }, []);
+  return <>
+    <div className="grid2" style={{ marginBottom: 14 }}>
+      {d.package && <><div className="k">Predefined package</div><div>{d.package.name} · saved {new Date(d.package.updatedAt).toLocaleString()}</div></>}
+      <div className="k">Started</div><div>{new Date(d.createdAt).toLocaleString()}</div>
+      <div className="k">Finished</div><div>{d.finishedAt ? new Date(d.finishedAt).toLocaleString() : 'Not recorded'}</div>
+      <div className="k">Route</div><div>{d.sourceEnv} → {d.targetEnv}</div>
+      <div className="k">Status</div><div><HistoryStatus status={d.status} /></div>
+      <div className="k">Account</div><div>{d.account || '—'}</div>
+      <div className="k">Progress</div><div>{d.completed} successful · {d.failed} failed · {d.skipped} skipped · {d.queueCount} total</div>
+    </div>
+    {d.error && <div className="alert err">{d.error}</div>}
+    {d.warning && <div className="alert warn">{d.warning}</div>}
+    {d.status === 'pending' && <div className="alert info">This queue has unfinished or unrecorded solutions. Refresh history for updates while deployment is running. Interrupted queues do not resume automatically.</div>}
+    <h3>Solutions in deployment order</h3>
+    <p className="muted">Open a solution to see its individual history, notes and dependencies.</p>
+    <div className="history-queue-solutions">
+      {d.solutions.map((item, index) => <div className="history-queue-solution" key={index}>
+        <span className="history-queue-position" aria-label={`Position ${index + 1}`}>{index + 1}</span>
+        <div className="history-queue-name"><strong>{item.solution}</strong><span className="muted">{item.version ? `v${item.version} · ` : ''}{item.exportManaged ? 'Managed' : 'Unmanaged'}</span></div>
+        <HistoryStatus status={item.status} />
+        <button ref={button => { buttons.current[index] = button; }} className="btn small secondary" aria-label={`View history for solution ${index + 1}, ${item.solution}`} onClick={() => openSolution(index)}>View details</button>
+      </div>)}
+    </div>
+  </>;
+}
+
+function SolutionDetails({ d }) {
+  const deps = d.dependencies || [];
+  return <>
       <div className="grid2" style={{ marginBottom: 14 }}>
-        <div className="k">When</div><div>{new Date(d.createdAt).toLocaleString()}</div>
+        {d.package && <><div className="k">Predefined package</div><div>{d.package.name}</div></>}
+        <div className="k">When</div><div>{d.createdAt ? new Date(d.createdAt).toLocaleString() : 'Not started / not recorded'}</div>
+        {d.startedAt && <><div className="k">Started</div><div>{new Date(d.startedAt).toLocaleString()}</div></>}
+        {d.finishedAt && <><div className="k">Finished</div><div>{new Date(d.finishedAt).toLocaleString()}</div></>}
+        {d.queueId && <><div className="k">Queue order</div><div>{d.queueIndex + 1} of {d.queueCount}</div></>}
         <div className="k">Route</div><div>{d.sourceEnv} → {d.targetEnv}</div>
         <div className="k">Type</div><div>{d.exportManaged ? 'Managed' : 'Unmanaged'}</div>
-        <div className="k">Deployment method</div><div>{d.deploymentMethod === 'agent' ? 'Agent' : 'Manual import'}</div>
+        <div className="k">Deployment method</div><div>{d.deploymentMethod === 'agent' ? 'Agent' : d.queueId ? 'Manual queue import' : 'Manual import'}</div>
         <div className="k">Status</div>
-        <div><span className={'pill ' + (d.status === 'success' ? 'ok' : 'bad')}>{d.status}</span></div>
+        <div><HistoryStatus status={d.status} /></div>
+        {typeof d.importCompleted === 'boolean' && <><div className="k">Import completed</div><div>{d.importCompleted ? 'Yes' : 'No'}</div></>}
+        {d.importJobId && <><div className="k">Import job</div><div className="muted">{d.importJobId}</div></>}
         <div className="k">Account</div><div className="muted">{d.account || '—'}</div>
         <div className="k">Stored</div>
         <div>
@@ -227,6 +291,7 @@ function Detail({ d, onClose, returnFocus }) {
               : (d.artifact ? <button className="btn small secondary" onClick={() => api.util.revealPath(d.artifact)}>Reveal .zip</button> : '—')}
         </div>
       </div>
+      {d.historyRecorded === false && <div className="alert info">{d.status === 'skipped' ? 'This solution was not deployed because the queue stopped.' : d.status === 'waiting' ? 'This solution has not started.' : d.status === 'running' ? 'This solution has no completed history record yet.' : d.status === 'unrecorded' ? 'The original queue did not save history for this position. Its solution details and outcome are unavailable.' : 'The full individual history record is unavailable. This view shows the outcome saved with the queue.'}</div>}
       {d.workItems && (
         <>
           <label>Work items</label>
@@ -273,7 +338,5 @@ function Detail({ d, onClose, returnFocus }) {
           {d.notesOneDriveUrl && <button className="btn small secondary" onClick={() => api.util.openExternal(d.notesOneDriveUrl)}>Open notes in OneDrive</button>}
         </div>
       )}
-      </div>
-    </dialog>
-  );
+  </>;
 }

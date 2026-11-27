@@ -21,6 +21,13 @@ contextBridge.exposeInMainWorld('api', {
   solution: {
     list: (orgUrl) => ipcRenderer.invoke('solution:list', orgUrl)
   },
+  packages: {
+    list: () => ipcRenderer.invoke('packages:list'),
+    save: (draft) => ipcRenderer.invoke('packages:save', draft),
+    remove: (reference) => ipcRenderer.invoke('packages:remove', reference),
+    load: (reference) => ipcRenderer.invoke('packages:load', reference),
+    chooseFolder: () => ipcRenderer.invoke('packages:chooseFolder')
+  },
   settings: {
     get: () => ipcRenderer.invoke('settings:get'),
     save: (patch) => ipcRenderer.invoke('settings:save', patch),
@@ -60,7 +67,14 @@ contextBridge.exposeInMainWorld('api', {
     importSolution: (params) => ipcRenderer.invoke('deploy:import', params),
     runAgent: (snapshot) => ipcRenderer.invoke('deploy:agent', snapshot),
     inspectFile: (filePath) => ipcRenderer.invoke('deploy:inspectFile', { filePath }),
-    pickZip: () => ipcRenderer.invoke('dialog:pickZip'),
+    pickZip: (options) => ipcRenderer.invoke('dialog:pickZip', options),
+    prepareQueue: (snapshot) => ipcRenderer.invoke('deploy:prepareQueue', snapshot),
+    runQueue: (snapshot) => ipcRenderer.invoke('deploy:queue', snapshot),
+    onQueueProgress: (cb) => {
+      const listener = (_event, data) => cb(data);
+      ipcRenderer.on('deploy:queueProgress', listener);
+      return () => ipcRenderer.removeListener('deploy:queueProgress', listener);
+    },
     record: (record) => ipcRenderer.invoke('deploy:record', record),
     onProgress: (cb) => {
       const listener = (_e, data) => cb(data);

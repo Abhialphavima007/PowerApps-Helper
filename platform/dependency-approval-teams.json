@@ -31,7 +31,7 @@
     },
     "definition": {
       "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
-      "contentVersion": "1.1.3.0",
+      "contentVersion": "1.1.4.0",
       "parameters": {
         "$connections": {
           "defaultValue": {},
@@ -132,7 +132,7 @@
                           "approvalType": "BasicAwaitAll",
                           "WebhookApprovalCreationInput/title": "@concat('Approve dependency repair: ',triggerBody()?['abhi_solutionname'],' / Run ',triggerBody()?['abhi_runid'],' / cycle ',string(triggerBody()?['abhi_repaircycle']))",
                           "WebhookApprovalCreationInput/assignedTo": "@triggerBody()?['abhi_recipients']",
-                          "WebhookApprovalCreationInput/details": "@concat(coalesce(first(body('Load_profile')?['value'])?['abhi_approvalintro'],''),'\n\nSolution: ',triggerBody()?['abhi_solutionname'],' / ',coalesce(triggerBody()?['abhi_solutionversion'],''),'\nFrom: ',coalesce(triggerBody()?['abhi_sourceenvironment'],''),' (',triggerBody()?['abhi_sourceurl'],')','\nTo: ',coalesce(triggerBody()?['abhi_targetenvironment'],''),' (',triggerBody()?['abhi_targeturl'],')','\n\n',first(split(coalesce(triggerBody()?['abhi_details'],''),'TECHNICAL COMPONENT REFERENCES')),'\n\nREPORTED DEPENDENCY ERROR\n',substring(coalesce(triggerBody()?['abhi_errordetails'],''),0,min(4000,length(coalesce(triggerBody()?['abhi_errordetails'],'')))),'\n\nREQUEST REFERENCE\nRun: ',triggerBody()?['abhi_runid'],' / repair cycle ',string(triggerBody()?['abhi_repaircycle']),'\nExpires (UTC): ',triggerBody()?['abhi_expireson'],'\nPlan SHA-256: ',triggerBody()?['abhi_planhash'],'\nThe exact machine plan and technical component references are retained in the Deployment Event in PowerApps Helper Setup.')",
+                          "WebhookApprovalCreationInput/details": "@concat('**Dependency repair approval**\n\n',coalesce(first(body('Load_profile')?['value'])?['abhi_approvalintro'],''),'\n\n**Approval rule:** ',if(equals(triggerBody()?['abhi_approvalmode'],100000000),'Every selected approver must approve.','The first selected approver to respond decides. A rejection stops the repair.'),'\n\n**1. Deployment**\n\n- **Solution:** ',replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(string(coalesce(triggerBody()?['abhi_solutionname'],'')),'\r',' '),'\n',' '),'\\','\\\\'),'`','\\`'),'*','\\*'),'_','\\_'),'[','\\['),']','\\]'),'<','\\<'),'>','\\>'),'#','\\#'),'\n- **Version:** ',replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(string(coalesce(triggerBody()?['abhi_solutionversion'],'')),'\r',' '),'\n',' '),'\\','\\\\'),'`','\\`'),'*','\\*'),'_','\\_'),'[','\\['),']','\\]'),'<','\\<'),'>','\\>'),'#','\\#'),'\n- **From:** ',replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(string(coalesce(triggerBody()?['abhi_sourceenvironment'],'')),'\r',' '),'\n',' '),'\\','\\\\'),'`','\\`'),'*','\\*'),'_','\\_'),'[','\\['),']','\\]'),'<','\\<'),'>','\\>'),'#','\\#'),' (',coalesce(triggerBody()?['abhi_sourceurl'],''),')','\n- **To:** ',replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(string(coalesce(triggerBody()?['abhi_targetenvironment'],'')),'\r',' '),'\n',' '),'\\','\\\\'),'`','\\`'),'*','\\*'),'_','\\_'),'[','\\['),']','\\]'),'<','\\<'),'>','\\>'),'#','\\#'),' (',coalesce(triggerBody()?['abhi_targeturl'],''),')','\n\n',trim(first(split(coalesce(triggerBody()?['abhi_details'],''),'TECHNICAL COMPONENT REFERENCES'))),'\n\n**5. Reported dependency error**\n\n```text\n',concat(replace(replace(substring(coalesce(triggerBody()?['abhi_errordetails'],''),0,min(4000,length(coalesce(triggerBody()?['abhi_errordetails'],'')))),'```','~~~'),'><','>\n<'),if(greater(length(coalesce(triggerBody()?['abhi_errordetails'],'')),4000),'\n[Excerpt; full error retained in the Deployment Event.]','')),'\n```','\n\n**6. Request reference**\n\n- **Run:** ',replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(string(coalesce(triggerBody()?['abhi_runid'],'')),'\r',' '),'\n',' '),'\\','\\\\'),'`','\\`'),'*','\\*'),'_','\\_'),'[','\\['),']','\\]'),'<','\\<'),'>','\\>'),'#','\\#'),'\n- **Repair cycle:** ',string(triggerBody()?['abhi_repaircycle']),'\n- **Expires (UTC):** ',replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(string(coalesce(triggerBody()?['abhi_expireson'],'')),'\r',' '),'\n',' '),'\\','\\\\'),'`','\\`'),'*','\\*'),'_','\\_'),'[','\\['),']','\\]'),'<','\\<'),'>','\\>'),'#','\\#'),'\n- **Plan SHA-256:**\n\n```text\n',replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(string(coalesce(triggerBody()?['abhi_planhash'],'')),'\r',' '),'\n',' '),'\\','\\\\'),'`','\\`'),'*','\\*'),'_','\\_'),'[','\\['),']','\\]'),'<','\\<'),'>','\\>'),'#','\\#'),'\n```','\n\nThe exact machine plan and technical component references are retained in the Deployment Event in PowerApps Helper Setup.')",
                           "WebhookApprovalCreationInput/enableNotifications": true,
                           "WebhookApprovalCreationInput/enableReassignment": false
                         },
@@ -161,7 +161,7 @@
                             "approvalType": "Basic",
                             "WebhookApprovalCreationInput/title": "@concat('Approve dependency repair: ',triggerBody()?['abhi_solutionname'],' / Run ',triggerBody()?['abhi_runid'],' / cycle ',string(triggerBody()?['abhi_repaircycle']))",
                             "WebhookApprovalCreationInput/assignedTo": "@triggerBody()?['abhi_recipients']",
-                            "WebhookApprovalCreationInput/details": "@concat(coalesce(first(body('Load_profile')?['value'])?['abhi_approvalintro'],''),'\n\nSolution: ',triggerBody()?['abhi_solutionname'],' / ',coalesce(triggerBody()?['abhi_solutionversion'],''),'\nFrom: ',coalesce(triggerBody()?['abhi_sourceenvironment'],''),' (',triggerBody()?['abhi_sourceurl'],')','\nTo: ',coalesce(triggerBody()?['abhi_targetenvironment'],''),' (',triggerBody()?['abhi_targeturl'],')','\n\n',first(split(coalesce(triggerBody()?['abhi_details'],''),'TECHNICAL COMPONENT REFERENCES')),'\n\nREPORTED DEPENDENCY ERROR\n',substring(coalesce(triggerBody()?['abhi_errordetails'],''),0,min(4000,length(coalesce(triggerBody()?['abhi_errordetails'],'')))),'\n\nREQUEST REFERENCE\nRun: ',triggerBody()?['abhi_runid'],' / repair cycle ',string(triggerBody()?['abhi_repaircycle']),'\nExpires (UTC): ',triggerBody()?['abhi_expireson'],'\nPlan SHA-256: ',triggerBody()?['abhi_planhash'],'\nThe exact machine plan and technical component references are retained in the Deployment Event in PowerApps Helper Setup.')",
+                            "WebhookApprovalCreationInput/details": "@concat('**Dependency repair approval**\n\n',coalesce(first(body('Load_profile')?['value'])?['abhi_approvalintro'],''),'\n\n**Approval rule:** ',if(equals(triggerBody()?['abhi_approvalmode'],100000000),'Every selected approver must approve.','The first selected approver to respond decides. A rejection stops the repair.'),'\n\n**1. Deployment**\n\n- **Solution:** ',replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(string(coalesce(triggerBody()?['abhi_solutionname'],'')),'\r',' '),'\n',' '),'\\','\\\\'),'`','\\`'),'*','\\*'),'_','\\_'),'[','\\['),']','\\]'),'<','\\<'),'>','\\>'),'#','\\#'),'\n- **Version:** ',replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(string(coalesce(triggerBody()?['abhi_solutionversion'],'')),'\r',' '),'\n',' '),'\\','\\\\'),'`','\\`'),'*','\\*'),'_','\\_'),'[','\\['),']','\\]'),'<','\\<'),'>','\\>'),'#','\\#'),'\n- **From:** ',replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(string(coalesce(triggerBody()?['abhi_sourceenvironment'],'')),'\r',' '),'\n',' '),'\\','\\\\'),'`','\\`'),'*','\\*'),'_','\\_'),'[','\\['),']','\\]'),'<','\\<'),'>','\\>'),'#','\\#'),' (',coalesce(triggerBody()?['abhi_sourceurl'],''),')','\n- **To:** ',replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(string(coalesce(triggerBody()?['abhi_targetenvironment'],'')),'\r',' '),'\n',' '),'\\','\\\\'),'`','\\`'),'*','\\*'),'_','\\_'),'[','\\['),']','\\]'),'<','\\<'),'>','\\>'),'#','\\#'),' (',coalesce(triggerBody()?['abhi_targeturl'],''),')','\n\n',trim(first(split(coalesce(triggerBody()?['abhi_details'],''),'TECHNICAL COMPONENT REFERENCES'))),'\n\n**5. Reported dependency error**\n\n```text\n',concat(replace(replace(substring(coalesce(triggerBody()?['abhi_errordetails'],''),0,min(4000,length(coalesce(triggerBody()?['abhi_errordetails'],'')))),'```','~~~'),'><','>\n<'),if(greater(length(coalesce(triggerBody()?['abhi_errordetails'],'')),4000),'\n[Excerpt; full error retained in the Deployment Event.]','')),'\n```','\n\n**6. Request reference**\n\n- **Run:** ',replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(string(coalesce(triggerBody()?['abhi_runid'],'')),'\r',' '),'\n',' '),'\\','\\\\'),'`','\\`'),'*','\\*'),'_','\\_'),'[','\\['),']','\\]'),'<','\\<'),'>','\\>'),'#','\\#'),'\n- **Repair cycle:** ',string(triggerBody()?['abhi_repaircycle']),'\n- **Expires (UTC):** ',replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(string(coalesce(triggerBody()?['abhi_expireson'],'')),'\r',' '),'\n',' '),'\\','\\\\'),'`','\\`'),'*','\\*'),'_','\\_'),'[','\\['),']','\\]'),'<','\\<'),'>','\\>'),'#','\\#'),'\n- **Plan SHA-256:**\n\n```text\n',replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(string(coalesce(triggerBody()?['abhi_planhash'],'')),'\r',' '),'\n',' '),'\\','\\\\'),'`','\\`'),'*','\\*'),'_','\\_'),'[','\\['),']','\\]'),'<','\\<'),'>','\\>'),'#','\\#'),'\n```','\n\nThe exact machine plan and technical component references are retained in the Deployment Event in PowerApps Helper Setup.')",
                             "WebhookApprovalCreationInput/enableNotifications": true,
                             "WebhookApprovalCreationInput/enableReassignment": false
                           },
@@ -249,10 +249,22 @@
                     "body": [
                       {
                         "type": "TextBlock",
-                        "text": "Approve dependency repair",
+                        "text": "Dependency repair approval",
                         "wrap": true,
                         "size": "Medium",
                         "weight": "Bolder"
+                      },
+                      {
+                        "type": "TextBlock",
+                        "text": "@concat('**Approval rule:** ',if(equals(triggerBody()?['abhi_approvalmode'],100000000),'Every selected approver must approve.','The first selected approver to respond decides. A rejection stops the repair.'))",
+                        "wrap": true
+                      },
+                      {
+                        "type": "TextBlock",
+                        "text": "1. Deployment",
+                        "wrap": true,
+                        "weight": "Bolder",
+                        "separator": true
                       },
                       {
                         "type": "FactSet",
@@ -277,31 +289,42 @@
                       },
                       {
                         "type": "TextBlock",
-                        "text": "@first(split(coalesce(triggerBody()?['abhi_details'],''),'TECHNICAL COMPONENT REFERENCES'))",
-                        "wrap": true
+                        "text": "@replace(first(split(trim(first(split(coalesce(triggerBody()?['abhi_details'],''),'TECHNICAL COMPONENT REFERENCES'))),'```text\n')),'`','')",
+                        "wrap": true,
+                        "separator": true
                       },
                       {
                         "type": "TextBlock",
-                        "text": "Reported dependency error",
+                        "text": "@if(contains(trim(first(split(coalesce(triggerBody()?['abhi_details'],''),'TECHNICAL COMPONENT REFERENCES'))),'```text\n'),first(split(last(split(trim(first(split(coalesce(triggerBody()?['abhi_details'],''),'TECHNICAL COMPONENT REFERENCES'))),'```text\n')),'\n```')),'')",
+                        "wrap": true,
+                        "fontType": "Monospace",
+                        "isVisible": "@contains(trim(first(split(coalesce(triggerBody()?['abhi_details'],''),'TECHNICAL COMPONENT REFERENCES'))),'```text\n')"
+                      },
+                      {
+                        "type": "TextBlock",
+                        "text": "@if(contains(trim(first(split(coalesce(triggerBody()?['abhi_details'],''),'TECHNICAL COMPONENT REFERENCES'))),'```text\n'),replace(last(split(trim(first(split(coalesce(triggerBody()?['abhi_details'],''),'TECHNICAL COMPONENT REFERENCES'))),'\n```')),'`',''),'')",
+                        "wrap": true,
+                        "isVisible": "@contains(trim(first(split(coalesce(triggerBody()?['abhi_details'],''),'TECHNICAL COMPONENT REFERENCES'))),'```text\n')"
+                      },
+                      {
+                        "type": "TextBlock",
+                        "text": "5. Reported dependency error",
                         "wrap": true,
                         "weight": "Bolder",
                         "separator": true
                       },
                       {
                         "type": "TextBlock",
-                        "text": "@substring(coalesce(triggerBody()?['abhi_errordetails'],''),0,min(1200,length(coalesce(triggerBody()?['abhi_errordetails'],''))))",
-                        "wrap": true
-                      },
-                      {
-                        "type": "TextBlock",
-                        "text": "Use the matching Microsoft approval request to approve or reject. Chat replies do not approve changes.",
+                        "text": "@concat(replace(replace(substring(coalesce(triggerBody()?['abhi_errordetails'],''),0,min(1200,length(coalesce(triggerBody()?['abhi_errordetails'],'')))),'```','~~~'),'><','>\n<'),if(greater(length(coalesce(triggerBody()?['abhi_errordetails'],'')),1200),'\n[Excerpt; full error retained in the Deployment Event.]',''))",
                         "wrap": true,
-                        "separator": true
+                        "fontType": "Monospace"
                       },
                       {
                         "type": "TextBlock",
-                        "text": "@if(equals(triggerBody()?['abhi_approvalmode'],100000000),'Every selected approver must approve.','The first selected approver to respond decides.')",
-                        "wrap": true
+                        "text": "6. Request reference",
+                        "wrap": true,
+                        "weight": "Bolder",
+                        "separator": true
                       },
                       {
                         "type": "FactSet",
@@ -315,10 +338,25 @@
                             "value": "@string(coalesce(triggerBody()?['abhi_runid'],''))"
                           },
                           {
+                            "title": "Repair cycle",
+                            "value": "@string(coalesce(triggerBody()?['abhi_repaircycle'],''))"
+                          },
+                          {
                             "title": "Expires (UTC)",
                             "value": "@string(coalesce(triggerBody()?['abhi_expireson'],''))"
                           }
                         ]
+                      },
+                      {
+                        "type": "TextBlock",
+                        "text": "@concat('**Plan SHA-256:**\n',coalesce(triggerBody()?['abhi_planhash'],''))",
+                        "wrap": true
+                      },
+                      {
+                        "type": "TextBlock",
+                        "text": "Use the matching Microsoft approval request to approve or reject. Chat replies do not approve changes. The exact machine plan and full error are retained in the Deployment Event in PowerApps Helper Setup.",
+                        "wrap": true,
+                        "separator": true
                       }
                     ],
                     "actions": [

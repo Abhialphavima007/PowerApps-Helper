@@ -54,9 +54,12 @@ function routingKey(config, parseChannel, parseGroup) {
 
 function envelope(text, helper) {
   const lines = text.split('\n');
-  // The Helper flow accepts bounded text-only cards. Keep multi-line details
-  // together so a deployment error cannot exceed its TextBlock count limit.
-  const blocks = helper ? [lines[0], lines.slice(1).join('\n')].filter(Boolean) : lines;
+  // Numbered deployment sections each occupy one block (five total), within
+  // the existing flow's 20-block/2,000-character bounds. Preserve legacy input.
+  const sections = text.split('\n\n');
+  const formatted = sections.length === 5 && sections.slice(1).every((section, index) =>
+    section.startsWith(`**${index + 1}. `));
+  const blocks = formatted ? sections : helper ? [lines[0], lines.slice(1).join('\n')].filter(Boolean) : lines;
   return { type: 'message', ...(helper ? { helper } : {}), attachments: [{ contentType: 'application/vnd.microsoft.card.adaptive', contentUrl: null,
     content: { $schema: 'http://adaptivecards.io/schemas/adaptive-card.json', type: 'AdaptiveCard', version: '1.2',
       body: blocks.map((line, index) => ({ type: 'TextBlock', text: line, wrap: true,

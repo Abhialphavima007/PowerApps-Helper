@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const { settings: automationSettings, DEFAULTS: AUTOMATION_DEFAULTS } = require('./deploymentAutomation');
 const { settings: teamsSettings, DEFAULTS: TEAMS_DEFAULTS } = require('./teamsNotifications');
+const { groupHistory, queueHistoryId } = require('./historyGrouping');
 
 let baseDir;
 let dbFile;
@@ -18,6 +19,7 @@ function init(userDataPath) {
   fs.mkdirSync(baseDir, { recursive: true });
   fs.mkdirSync(path.join(baseDir, 'artifacts'), { recursive: true });
   fs.mkdirSync(path.join(baseDir, 'solutions'), { recursive: true });
+  fs.mkdirSync(path.join(baseDir, 'packages'), { recursive: true });
   if (!fs.existsSync(dbFile)) {
     fs.writeFileSync(dbFile, JSON.stringify({ deployments: [] }, null, 2));
   }
@@ -33,6 +35,7 @@ function defaultSettings() {
     teamsNotifications: { ...TEAMS_DEFAULTS, workflowRouting: 'payload' },
     storageMode: 'local', // 'local' | 'onedrive'
     localFolder: path.join(baseDir, 'solutions'),
+    packageLibraryFolder: path.join(baseDir, 'packages'),
     oneDriveRoot: 'PowerApps Helper',
     clientName: '',
     clientNamesByTenant: {},
@@ -125,6 +128,49 @@ function getDeployment(id) {
   return readAll().deployments.find((d) => d.id === id) || null;
 }
 
+function listHistoryEntries() {
+  const data = readAll();
+  return groupHistory(data.deployments, data.queues || []);
+}
+
+function getHistoryEntry(id) {
+  return listHistoryEntries().find(item => item.id === id) || getDeployment(id);
+}
+
+// Store only queue metadata and fallback outcomes here. Full logs/notes remain
+// in the existing individual deployment records, linked by queueId/index.
+function startDeploymentQueue(queue, account) {
+  const data = readAll();
+  const record = {
+    id: queueHistoryId(queue.queueId), queueId: queue.queueId,
+    createdAt: new Date().toISOString(), status: 'pending',
+    sourceEnv: queue.sourceEnv || 'Package file', sourceUrl: queue.sourceUrl || '',
+    targetEnv: queue.targetEnv, targetUrl: queue.targetUrl, account,
+    deploymentMethod: queue.useAgent ? 'agent' : 'queue', exportManaged: queue.exportManaged,
+    package: queue.package,
+    description: queue.description, workItems: queue.workItems, notes: queue.notes,
+    items: queue.items.map(item => ({ solution: item.solution || item.solutionUniqueName,
+      solutionUniqueName: item.solutionUniqueName, version: item.version,
+      exportManaged: item.exportManaged ?? queue.exportManaged,
+      deploymentMethod: queue.useAgent ? 'agent' : 'queue', status: 'waiting' }))
+  };
+  data.queues = [...(data.queues || []), record];
+  writeAll(data);
+  return record;
+}
+
+function updateDeploymentQueue(queueId, index, patch) {
+  const data = readAll();
+  const record = data.queues?.find(item => item.queueId === queueId);
+  if (!record) throw new Error('The queue history record is unavailable.');
+  if (index == null) Object.assign(record, patch);
+  else {
+    if (!record.items[index]) throw new Error('The solution history position is unavailable.');
+    Object.assign(record.items[index], patch);
+  }
+  writeAll(data);
+}
+
 function historyFilters(value = {}) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid history filters.');
   const result = {};
@@ -144,17 +190,18 @@ function matchingDeployments(items, value) {
     && (!source || (item.sourceUrl || item.sourceEnv) === source)
     && (!target || (item.targetUrl || item.targetEnv) === target)
     && (!status || item.status === status)
-    && (!needle || `${item.solution} ${item.solutionUniqueName || ''} ${item.workItems || ''}`.toLocaleLowerCase().includes(needle)));
+    && (!needle || [item, ...(item.solutions || [])].some(record =>
+      `${record.solution} ${record.package?.name || ''} ${record.solutionUniqueName || ''} ${record.workItems || ''}`.toLocaleLowerCase().includes(needle))));
 }
 
 // Keep large notes, import logs and work-item details out of page responses.
 function queryDeployments({ filters = {}, page = 1, pageSize = 25 } = {}) {
   if (!Number.isSafeInteger(page) || page < 1 || ![10, 25, 50, 100].includes(pageSize)) throw new Error('Invalid history page.');
-  const all = listDeployments();
+  const all = listHistoryEntries();
   const matches = matchingDeployments(all, filters);
   const totalPages = Math.max(1, Math.ceil(matches.length / pageSize));
   const currentPage = Math.min(page, totalPages);
-  const fields = ['id', 'createdAt', 'solution', 'deploymentMethod', 'exportManaged', 'version', 'sourceEnv', 'targetEnv', 'status'];
+  const fields = ['id', 'kind', 'createdAt', 'solution', 'package', 'deploymentMethod', 'exportManaged', 'mixedTypes', 'version', 'sourceEnv', 'targetEnv', 'status', 'queueCount', 'completed'];
   const options = (name, url) => [...new Map(all.filter(item => item[name]).map(item =>
     [item[url] || item[name], { id: item[url] || item[name], label: item[name] }])).values()]
     .sort((a, b) => a.label.localeCompare(b.label));
@@ -169,7 +216,28 @@ function queryDeployments({ filters = {}, page = 1, pageSize = 25 } = {}) {
 }
 
 function matchingDeploymentIds(filters) {
-  return matchingDeployments(listDeployments(), filters).map(item => item.id);
+  return matchingDeployments(listHistoryEntries(), filters).map(item => item.id);
+}
+
+function exportHistoryRecords(ids) {
+  const wanted = new Set(ids);
+  const entries = listHistoryEntries();
+  const selected = entries.filter(item => wanted.has(item.id));
+  // CSV keeps one row per solution; JSON also retains individual detail.
+  const records = selected.flatMap(item => item.kind === 'queue' ? item.solutions.map(solution => ({
+    ...solution, queueCreatedAt: item.createdAt, queueFinishedAt: item.finishedAt,
+    queueStatus: item.status, queueWarning: item.warning
+  })) : [item]);
+  // Preserve export by an existing individual ID for older IPC consumers.
+  const included = new Set(records.map(item => item.id));
+  let individualCount = 0;
+  for (const record of listDeployments()) {
+    if (wanted.has(record.id) && !included.has(record.id)) {
+      records.push(record);
+      individualCount += 1;
+    }
+  }
+  return { records, count: selected.length + individualCount };
 }
 
 function addDeployment(record) {
@@ -193,10 +261,14 @@ function updateDeployment(id, patch) {
 function deleteDeployments(ids) {
   const wanted = new Set(ids);
   const data = readAll();
-  const before = data.deployments.length;
-  data.deployments = data.deployments.filter((item) => !wanted.has(item.id));
+  const groups = groupHistory(data.deployments, data.queues || []);
+  const queueIds = new Set(groups.filter(item => item.kind === 'queue' && wanted.has(item.id)).map(item => item.queueId));
+  const deleted = groups.filter(item => wanted.has(item.id)).length;
+  const individualDeleted = data.deployments.filter(item => wanted.has(item.id) && item.queueId && !queueIds.has(item.queueId)).length;
+  data.deployments = data.deployments.filter(item => !wanted.has(item.id) && !queueIds.has(item.queueId));
+  if (data.queues) data.queues = data.queues.filter(item => !queueIds.has(item.queueId));
   writeAll(data);
-  return { deleted: before - data.deployments.length };
+  return { deleted: deleted + individualDeleted };
 }
 
 module.exports = {
@@ -207,6 +279,11 @@ module.exports = {
   getClientNamePreference,
   saveClientNamePreference,
   listDeployments,
+  listHistoryEntries,
+  getHistoryEntry,
+  startDeploymentQueue,
+  updateDeploymentQueue,
+  exportHistoryRecords,
   queryDeployments,
   matchingDeploymentIds,
   getDeployment,

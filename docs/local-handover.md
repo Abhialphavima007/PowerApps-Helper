@@ -8,7 +8,7 @@ Install the reviewed desktop build. Sign in with the Microsoft work account that
 
 ## 2. Install the solution and connect its flows
 
-Import **PowerAppsHelper 1.1.3.0** into the environment chosen for approval and reporting. Use the unmanaged copy in a development environment when customizing. Use a reviewed, tested managed copy downstream. Solution packages do not transfer profiles, credentials, connection accounts, role assignments or the signed webhook address.
+Import **PowerAppsHelper 1.1.3.1** into the environment chosen for approval and reporting. Use the unmanaged copy in a development environment when customizing. Use a reviewed, tested managed copy downstream. Solution packages do not transfer profiles, credentials, connection accounts, role assignments or the signed webhook address.
 
 Bind the solution's five connection references to the new installation's own connections:
 
@@ -57,3 +57,5 @@ Use a non-production source/target and synthetic data. Check a successful deploy
 Keep the desktop running and connected until deployment finishes. Helper prevents automatic idle sleep during export, import and agent execution, including approval waits, then releases the protection. The screen may turn off. Forced sleep, lid-close policies, hibernation, shutdown or network interruption are not covered; this is not a cloud deployment worker or restart-resume feature.
 
 Draft artifacts need independent review, downstream import checks and a recovery rehearsal before release. See [implementation and validation evidence](approval-usability-improvements.md).
+
+For desktop 0.1.6 and the complete connection, package and timeout instructions, use the [setup guide](setup-guide.md) or [Word guide](PowerApps-Helper-Setup-Guide.docx).

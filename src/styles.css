@@ -330,6 +330,14 @@ tr:hover td { background: var(--panel-2); }
 .history-dialog-head h2 { margin: 4px 0 0; font-size: 19px; overflow-wrap: anywhere; }
 .history-dialog-body { padding: 20px 24px; overflow-wrap: anywhere; }
 .history-dialog-body table { display: block; overflow-x: auto; }
+.history-queue-caption { margin-top: 4px; font-size: 12px; }
+.history-back { margin-bottom: 18px; }
+.history-queue-solutions { display: flex; flex-direction: column; gap: 10px; }
+.history-queue-solution { display: flex; align-items: center; gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius); }
+.history-queue-position { display: grid; place-items: center; flex: 0 0 30px; height: 30px; border-radius: 50%; background: var(--panel); color: var(--muted); border: 1px solid var(--border); }
+.history-queue-name { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.history-queue-name > span { font-size: 12px; }
+@media (max-width: 600px) { .history-queue-solution { flex-wrap: wrap; } .history-queue-solution > button { margin-left: auto; } }
 .storage-client { max-width: 440px; margin-bottom: 18px; }
 .storage-client p { margin: 6px 0 0; font-size: 12px; }
 @media (max-width: 700px) { .main { padding: 20px 16px; } .history-stats { gap: 7px; } .history-stats > div { padding: 12px; } }
@@ -684,6 +692,26 @@ tr:hover td { background: var(--panel-2); }
 .settings-page .credential-controls { flex-wrap: wrap; }
 .settings-page .credential-controls input { flex-basis: 240px; }
 .settings-page .storage-client { margin: 24px 0; }
+.deployment-fields { border: 0; margin: 0; padding: 0; min-width: 0; }
+.deployment-queue { list-style: none; padding: 0; margin: 16px 0; }
+.deployment-queue .queue-item { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; padding: 14px; margin-bottom: 8px; border: 1px solid var(--border); border-radius: 12px; background: var(--radio-bg); }
+.deployment-queue .queue-position { font-weight: 700; min-width: 24px; }
+.deployment-queue .queue-details { display: flex; flex: 1; flex-direction: column; gap: 4px; min-width: 180px; overflow-wrap: anywhere; }
+.deployment-queue .queue-version { width: 170px; margin: 0; }
+.deployment-queue .queue-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.deployment-queue .running { border-color: var(--accent); }
+.deployment-queue .skipped { opacity: .7; }
+.queue-review { margin: 0 0 16px; }
+.queue-review > summary { padding: 14px; cursor: pointer; border: 1px solid var(--border); border-radius: 12px; }
+.package-library, .package-save { margin: 18px 0; padding: 18px; border: 1px solid var(--border); border-radius: 12px; }
+.package-library h3, .package-save h3 { margin-top: 0; }
+.package-folder { display: flex; flex-direction: column; gap: 6px; padding: 12px; border-radius: 8px; background: var(--radio-bg); overflow-wrap: anywhere; }
+.package-folder .toolbar { margin: 4px 0 0; }
+.package-preview { margin-top: 16px; }
+.package-preview ol { padding-left: 24px; }
+.package-preview li { margin: 8px 0; overflow-wrap: anywhere; }
+.package-source-url { overflow-wrap: anywhere; }
+@media (max-width: 650px) { .deployment-fields > .seg { flex-wrap: wrap; } .package-library, .package-save { padding: 12px; } }
 .settings-page .appearance-options legend { font-size: 21px; font-weight: 650; letter-spacing: -.4px; }
 @media (max-width: 1050px) {
   .settings-layout { grid-template-columns: 190px minmax(0, 1fr); gap: 20px; }

@@ -1,6 +1,6 @@
 # Teams deployment connector
 
-Connector revision **1.4.0**, payload contracts **1 and 2**, MCP contract **1.1.0** (compatible additive groupLink). Local implementation for PowerApps Helper **0.1.4**; no new dependencies, installer, release or live message.
+Connector revision **1.4.1**, payload contracts **1 and 2**, MCP contract **1.1.0** (compatible additive groupLink). Local implementation for PowerApps Helper **0.1.5**; no new dependencies, installer, release or live message.
 
 **Teams notifications use Settings only.** Choose private people, one existing group chat, one channel, or any combination. The recommended connection uses a Teams workflow, with optional direct Microsoft Graph messaging. The live workflow in **Abhinav Research** is **on**, with its native signed Teams webhook and existing bound connection preserved. On 26 November 2026, its destination routing was extended and exact saved-definition readback verified. Actual group/channel delivery remains unverified.
 
@@ -131,6 +131,14 @@ Shared consumer inventory: auth serves main, Dataverse, OneDrive, Azure DevOps, 
 Require one non-author approval and a second qualified security reviewer before release. No exception or release is self-approved (STD-02 / REL-01); adoption does not resolve SEC-01 / SEC-02. CI publishes on push to main; no commit/push/package/publishing was performed.
 
 ## Changelog
+
+### 1.4.1 — 27 November 2026
+
+- Deployment notifications use bold, numbered Solution / Deployment / Status / Timing sections. Queue export, import and agent messages include Solution N of Total in the title and details. Failed installation/session checks before submission do not count as import attempts; final status retains the installation/authentication phase and import-completion evidence.
+- Workflow cards group the title and four sections into five TextBlocks, within the existing 20-block schema; each section retains the 2,000-character limit. Legacy unstructured envelopes, payload versions 1/2 and routing contracts remain supported. No cloud-flow change is needed.
+- Direct Graph messages use escaped HTML headings and lists. Workflow values escape Markdown so solution names and error text cannot inject headings or links. Recipients, scopes, callback storage, delivery ordering and uncertain-send behavior retain their existing contracts.
+- Consumer inventory: main-process export/import/agent handlers and the optional Teams Codex bridge consume the unchanged notification start/update/finish API. Notifications consume the unchanged workflow post/envelope API; the five-block card is accepted by the checked-in destination schema. No dependency change.
+- Syntax checks for notification/workflow/main/queue/Dataverse services and the renderer build passed. Local failure history verified installation phase with no import job; public Microsoft metadata supports the replacement system-job query. No tests, actual Teams send, live cloud/schema forwarding, packaged-host check, independent review or reliable changed-code coverage measurement was performed. D01/D02/D06/D07 remain open for those relevant gaps. Restart Helper; no installer was produced.
 
 ### 1.4.0 — 26 November 2026
 

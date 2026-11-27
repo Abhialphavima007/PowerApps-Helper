@@ -23,13 +23,13 @@ test('base generators use Flow owner for the organization-owned event table', ()
     }
   });
   assert.deepEqual([...written.keys()].sort(), ['dependency-approval.json', 'deployment-outcome.json']);
-  for (const flow of written.values()) {
+  for (const [name, flow] of written) {
     const parameters = triggerParameters(flow);
     assert.equal(parameters['subscriptionRequest/entityname'], 'abhi_deploymentevent');
     assert.equal(parameters['subscriptionRequest/message'], 1);
     assert.equal(parameters['subscriptionRequest/scope'], 4);
     assert.equal(parameters['subscriptionRequest/runas'], 3);
-    assert.equal(flow.properties.definition.contentVersion, '1.1.3.0');
+    assert.equal(flow.properties.definition.contentVersion, name === 'dependency-approval.json' ? '1.1.4.0' : '1.1.3.0');
   }
   assert.match(triggerParameters(written.get('dependency-approval.json'))['subscriptionRequest/filterexpression'], /abhi_eventtype eq 100000002/);
 });
@@ -51,7 +51,7 @@ test('Teams extension corrects historical Row owner while preserving the trigger
   assert.deepEqual(baseline, original);
   const expected = { ...triggerParameters(baseline), 'subscriptionRequest/runas': 3 };
   assert.deepEqual(triggerParameters(flow), expected);
-  assert.equal(flow.properties.definition.contentVersion, '1.1.3.0');
+  assert.equal(flow.properties.definition.contentVersion, '1.1.4.0');
   assert.equal(flow.properties.connectionReferences.shared_commondataserviceforapps.connection.connectionReferenceLogicalName, 'abhi_testDataverse');
   const actions = flow.properties.definition.actions.Process_dependency_approval.actions.Validate_request.actions;
   assert.equal(actions.Choose_approval_mode.else.actions.Request_first_response.inputs.parameters.approvalType, 'Basic');

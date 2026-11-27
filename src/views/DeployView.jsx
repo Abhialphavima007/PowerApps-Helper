@@ -34,6 +34,17 @@ function TypePill({ managed }) {
   return <span className={'pill ' + (managed ? 'managed' : 'unmanaged')}>{managed ? 'Managed' : 'Unmanaged'}</span>;
 }
 
+function filePackageIssues(item) {
+  const issues = [];
+  if (!item.artifact) issues.push('The ZIP file location is missing. Choose this ZIP again.');
+  if (!item.solutionUniqueName) issues.push('The solution unique name is missing. Choose a ZIP containing solution.xml.');
+  if (typeof item.version !== 'string' || !/^\d+\.\d+\.\d+(?:\.\d+)?$/.test(item.version)) {
+    issues.push(`${item.version ? `Found solution version “${item.version}”` : 'The solution version is missing'}. Existing ZIP versions must have three or four numeric parts, such as 1.0.67 or 1.0.67.0. Choose a ZIP containing a valid solution version.`);
+  }
+  if (typeof item.exportManaged !== 'boolean') issues.push('The managed or unmanaged type is missing. Choose this ZIP again.');
+  return issues;
+}
+
 function ProviderSelect({ provider, setProvider, providers }) {
   return <select value={provider} onChange={(event) => setProvider(event.target.value)}>
     <option value="foundry" disabled={!providers.foundry}>Azure AI Foundry {providers.foundry ? '' : '(configure in Settings)'}</option>
@@ -124,8 +135,51 @@ function SolutionCombobox({ solutions, selected, onSelect, disabled, loading }) 
   </div>;
 }
 
+function QueueList({ items, statuses = {}, validationIssues = [], editable = false, onMove, onRemove, onVersion }) {
+  return <ol className="deployment-queue" aria-label="Solution deployment order" aria-live="polite">
+    {items.map((item, index) => <li key={item.solutionUniqueName} className={'queue-item ' + (statuses[index]?.status || '')}>
+      <span className="queue-position" aria-label={`Position ${index + 1}`}>{index + 1}</span>
+      <div className="queue-details">
+        <b>{item.solution || item.solutionUniqueName}</b>
+        <span className="muted">{item.solutionUniqueName}{item.analysis ? ` · ${item.analysis.inspection.managed ? 'Managed' : 'Unmanaged'}` : typeof item.exportManaged === 'boolean' ? ` · ${item.exportManaged ? 'Managed' : 'Unmanaged'}` : ''}</span>
+        {item.artifact && <span className="muted package-source-url">{item.artifact}</span>}
+        {validationIssues.filter(issue => issue.index === index).map(issue => <span key={issue.index} className="alert err">
+          {issue.reasons.join(' ')}
+        </span>)}
+        {statuses[index] && <span>{statuses[index].status === 'done' ? '✔ ' : statuses[index].status === 'error' ? '✕ ' : ''}{statuses[index].message}</span>}
+      </div>
+      {editable && onVersion ? <label className="queue-version">New version
+        <input aria-label={`New version for ${item.solutionUniqueName}`} value={item.version} onChange={event => onVersion(index, event.target.value)} />
+      </label> : <span className="muted">v{item.version}</span>}
+      {editable && <div className="queue-actions">
+        <button type="button" className="btn small secondary" disabled={index === 0} aria-label={`Move ${item.solutionUniqueName} up`} onClick={() => onMove(index, -1)}>↑</button>
+        <button type="button" className="btn small secondary" disabled={index === items.length - 1} aria-label={`Move ${item.solutionUniqueName} down`} onClick={() => onMove(index, 1)}>↓</button>
+        <button type="button" className="btn small secondary" aria-label={`Remove ${item.solutionUniqueName}`} onClick={() => onRemove(index)}>Remove</button>
+      </div>}
+    </li>)}
+  </ol>;
+}
+
 export default function DeployView({ account, envs, envLoading, envError, refreshEnvs, providers }) {
-  const [mode, setMode] = useState('source'); // 'source' | 'file'
+  const [mode, setMode] = useState('source'); // 'source' | 'file' | 'predefined'
+  const [selectionMode, setSelectionMode] = useState('single');
+  const multiple = mode === 'predefined' || selectionMode === 'multiple';
+  const [library, setLibrary] = useState({ packages: [], folder: '', warnings: [] });
+  const [libraryLoading, setLibraryLoading] = useState(false);
+  const [libraryError, setLibraryError] = useState('');
+  const [libraryMessage, setLibraryMessage] = useState('');
+  const [packageChoice, setPackageChoice] = useState('');
+  const [loadedPackage, setLoadedPackage] = useState(null);
+  const sourceMode = mode === 'source' || (mode === 'predefined' && loadedPackage?.mode !== 'file');
+  const [editingPackage, setEditingPackage] = useState(null);
+  const [packageName, setPackageName] = useState('');
+  const [packageDescription, setPackageDescription] = useState('');
+  const libraryRequest = useRef(0);
+  const [queueItems, setQueueItems] = useState([]);
+  const [queueStatuses, setQueueStatuses] = useState({});
+  const [queueResult, setQueueResult] = useState(null);
+  const queueRequest = useRef('');
+  const draftAccount = useRef(account?.homeAccountId);
   const [step, setStep] = useState('config');
   const [sourceUrl, setSourceUrl] = useState('');
   const [targetUrl, setTargetUrl] = useState('');
@@ -171,12 +225,17 @@ export default function DeployView({ account, envs, envLoading, envError, refres
     const off = api.deploy.onProgress((d) => setProgress((prev) => ({ ...prev, [d.stage]: { status: d.status, percent: d.percent, message: d.message } })));
     return off;
   }, []);
+  useEffect(() => api.deploy.onQueueProgress(data => {
+    if (data.requestId !== queueRequest.current) return;
+    setQueueStatuses(previous => ({ ...previous, [data.index]: { status: data.status, message: data.message } }));
+    if (data.status === 'running') setProgress({});
+  }), []);
 
   const selectedSolution = useMemo(() => solutions.find((s) => s.uniqueName === solutionName), [solutions, solutionName]);
 
   const loadSolutions = async (url) => {
     const request = ++solutionRequest.current;
-    setSolLoading(true); setSolutions([]); setSolutionName('');
+    setSolLoading(true); setSolutions([]); setSolutionName(''); setQueueItems([]); setQueueStatuses({});
     if (!url) { setSolLoading(false); return; }
     try {
       const r = await api.solution.list(url);
@@ -227,13 +286,216 @@ export default function DeployView({ account, envs, envLoading, envError, refres
   };
 
   // Effective managed flag for the current deployment.
-  const managed = mode === 'file' ? !!analysis?.inspection?.managed : deployType === 'managed';
+  const managed = sourceMode ? deployType === 'managed' : !!analysis?.inspection?.managed;
   const effectiveNotes = notes === null ? description : notes;
 
   const resetProgress = (keys) => setProgress((prev) => { const next = { ...prev }; keys.forEach((k) => delete next[k]); return next; });
 
   const canAnalyzeSource = sourceUrl && targetUrl && selectedSolution && !selectedSolution.isManaged && sourceUrl !== targetUrl;
-  const canAnalyzeFile = targetUrl && filePath;
+  const canAnalyzeFile = targetUrl && filePath && analysis?.artifact === filePath;
+  const canReviewQueue = targetUrl && queueItems.length >= (mode === 'predefined' || editingPackage ? 1 : 2) &&
+    (mode !== 'predefined' || loadedPackage) && (!sourceMode ||
+    (sourceUrl && sourceUrl !== targetUrl && queueItems.every(item => /^\d+\.\d+\.\d+\.\d+$/.test(item.version))));
+  const packageItems = multiple ? queueItems : sourceMode
+    ? selectedSolution ? [{ solutionUniqueName: selectedSolution.uniqueName, solution: selectedSolution.friendlyName }] : []
+    : filePath && analysis?.artifact === filePath && analysis?.inspection ? [{ artifact: filePath, sha256: analysis.sha256,
+      solutionUniqueName: analysis.inspection.uniqueName, solution: analysis.inspection.uniqueName,
+      version: analysis.inspection.version, exportManaged: analysis.inspection.managed }] : [];
+  const packageFileIssues = sourceMode ? [] : packageItems.map((item, index) => ({
+    index, solution: item.solution || item.solutionUniqueName || 'Unnamed solution', reasons: filePackageIssues(item)
+  })).filter(issue => issue.reasons.length);
+  const packageSaveIssue = !packageName.trim() ? 'Enter a package name to save.'
+    : sourceMode && !sourceUrl ? 'Choose a source environment to save.'
+    : !packageItems.length ? sourceMode ? 'Select at least one solution to save.' : 'Choose at least one solution ZIP and wait for its details to load.'
+    : packageFileIssues.length ? `Review ${packageFileIssues.length} solution${packageFileIssues.length === 1 ? '' : 's'} before saving.` : '';
+  const canSavePackage = !packageSaveIssue;
+  const changeSelection = value => {
+    setEditingPackage(null); setLoadedPackage(null); setLibraryMessage('');
+    setSelectionMode(value); setQueueItems([]); setQueueStatuses({}); setQueueResult(null);
+    setAnalysis(null); setFilePath(''); setSolutionName(''); setNotes(null); setProgress({}); setError('');
+  };
+  const changeMode = value => {
+    ++solutionRequest.current;
+    setLoadedPackage(null); setEditingPackage(null); setLibraryMessage(''); setPackageChoice('');
+    setSolLoading(false);
+    setMode(value); setAnalysis(null); setFilePath(''); setQueueItems([]);
+    setQueueStatuses({}); setQueueResult(null); setProgress({}); setError('');
+    setSolutionName(''); setSolutions([]);
+    if (value === 'source' && sourceUrl) loadSolutions(sourceUrl);
+  };
+  const changeDeployType = value => {
+    if (value === deployType) return;
+    setDeployType(value); setAnalysis(null); setQueueStatuses({}); setProgress({});
+    setQueueItems(previous => previous.map(item => ({ ...item, analysis: undefined })));
+  };
+  const addQueueSolution = name => {
+    const solution = solutions.find(item => item.uniqueName === name);
+    if (!solution || queueItems.some(item => item.solutionUniqueName === name)) return;
+    setQueueItems(previous => [...previous, { solutionUniqueName: name, solution: solution.friendlyName,
+      solutionId: solution.solutionId, version: bumpVersion(solution.version) }]);
+    setQueueStatuses({});
+  };
+  const moveQueueItem = (index, direction) => {
+    setQueueItems(previous => {
+      const next = [...previous];
+      [next[index], next[index + direction]] = [next[index + direction], next[index]];
+      return next;
+    });
+    setQueueStatuses({});
+  };
+  const pickQueueFiles = async () => {
+    const request = ++solutionRequest.current;
+    setError(''); setBusy(true);
+    try {
+      const picked = await api.deploy.pickZip({ multiple: true });
+      if (request !== solutionRequest.current) return;
+      if (!picked.ok) return;
+      const additions = [];
+      const seen = new Set(queueItems.map(item => item.solutionUniqueName.toLowerCase()));
+      for (const artifact of picked.paths) {
+        const analysis = await api.deploy.inspectFile(artifact);
+        if (request !== solutionRequest.current) return;
+        if (!analysis.ok || !analysis.inspection?.uniqueName || !analysis.inspection.version) throw new Error(analysis.error || 'Choose solution ZIPs containing solution.xml.');
+        const name = analysis.inspection.uniqueName;
+        if (seen.has(name.toLowerCase())) throw new Error('This solution is already selected: ' + name);
+        seen.add(name.toLowerCase());
+        additions.push({ artifact, analysis, sha256: analysis.sha256, solutionUniqueName: name, solution: name,
+          version: analysis.inspection.version, exportManaged: analysis.inspection.managed });
+      }
+      setQueueItems(previous => [...previous, ...additions]); setQueueStatuses({});
+    } catch (error) { if (request === solutionRequest.current) setError(String(error.message || error)); }
+    finally { if (request === solutionRequest.current) setBusy(false); }
+  };
+  const queueSnapshot = useAgent => ({
+    requestId: queueRequest.current, mode: sourceMode ? 'source' : 'file', accountId: account?.homeAccountId,
+    packageRef: mode === 'predefined' && loadedPackage ? { id: loadedPackage.id, hash: loadedPackage.hash } : undefined,
+    sourceUrl: sourceMode ? sourceUrl : '', sourceEnv: sourceMode ? envName(envs, sourceUrl) : 'Package file',
+    targetUrl, targetEnv: envName(envs, targetUrl), items: queueItems,
+    exportManaged: sourceMode ? deployType === 'managed' : queueItems.every(item => item.exportManaged), overwrite: forceOverwrite, publishChanges,
+    description, workItems, workItemDetails, workItemSummary: workSummary, notes: effectiveNotes,
+    gitCommit, useAgent
+  });
+  const reviewQueue = async () => {
+    setError(''); setQueueResult(null); setQueueStatuses({}); setProgress({});
+    setBusy(true); queueRequest.current = crypto.randomUUID();
+    try {
+      const result = await api.deploy.prepareQueue(queueSnapshot(false));
+      if (!result.ok) throw new Error(result.error || (sourceMode ? 'Could not export the queue.' : 'Could not review the ZIP files.'));
+      setQueueItems(result.items); setStep('analyze');
+    } catch (error) { setError(String(error.message || error)); }
+    finally { setBusy(false); }
+  };
+  const runQueue = async useAgent => {
+    setError(''); setQueueResult(null); setQueueStatuses({}); setProgress({}); setBusy(true);
+    queueRequest.current = crypto.randomUUID();
+    try {
+      const result = await api.deploy.runQueue(queueSnapshot(useAgent));
+      setQueueResult(result);
+      if (!result.results?.length) setQueueStatuses(Object.fromEntries(queueItems.map((_, index) =>
+        [index, { status: 'skipped', message: 'Not started. ' + (result.error || 'Queue could not start.') }])));
+    } catch (error) {
+      const message = String(error.message || error);
+      setQueueResult({ ok: false, error: message });
+      setQueueStatuses(Object.fromEntries(queueItems.map((_, index) => [index, { status: 'skipped', message: 'Not started. ' + message }])));
+    }
+    finally { setBusy(false); }
+  };
+
+  const refreshPackages = async () => {
+    const request = ++libraryRequest.current;
+    setLibraryLoading(true); setLibraryError('');
+    try {
+      const result = await api.packages.list();
+      if (request !== libraryRequest.current) return;
+      if (!result.ok) throw new Error(result.error || 'Could not read the package library.');
+      setLibrary(result);
+      if (loadedPackage && !result.packages.some(recipe => recipe.id === loadedPackage.id && recipe.hash === loadedPackage.hash)) {
+        clearLoadedPackage();
+        setError('The saved package changed or was removed. Load its current definition before continuing.');
+      }
+    } catch (error) {
+      if (request === libraryRequest.current) { setLibrary({ packages: [], folder: '', warnings: [] }); setLibraryError(error.message); }
+    } finally { if (request === libraryRequest.current) setLibraryLoading(false); }
+  };
+  useEffect(() => {
+    if (mode === 'predefined' && step === 'config') refreshPackages();
+    return () => { ++libraryRequest.current; };
+  }, [mode, step, account?.homeAccountId]);
+
+  const clearLoadedPackage = () => {
+    ++solutionRequest.current;
+    setLoadedPackage(null); setQueueItems([]); setQueueStatuses({}); setQueueResult(null);
+    setProgress({}); setAnalysis(null); setFilePath(''); setError(''); setSourceUrl(''); setSolLoading(false);
+  };
+  const loadPackage = async (edit = false, id = packageChoice) => {
+    const recipe = library.packages.find(item => item.id === id);
+    if (!recipe) return;
+    const request = ++solutionRequest.current;
+    setBusy(true); setSolLoading(true); setError(''); setQueueItems([]); setLoadedPackage(null); setLibraryMessage('');
+    try {
+      const result = await api.packages.load({ id: recipe.id, hash: recipe.hash, accountId: account?.homeAccountId, edit });
+      if (request !== solutionRequest.current) return;
+      if (!result.ok) throw new Error(result.error || 'Could not load the saved package.');
+      setSourceUrl(result.package.sourceUrl); setDeployType(result.package.exportManaged ? 'managed' : 'unmanaged');
+      setQueueItems(result.items); setQueueStatuses({}); setQueueResult(null); setAnalysis(null); setFilePath(''); setProgress({});
+      if (targetUrl === result.package.sourceUrl) setTargetUrl('');
+      if (edit) {
+        setMode(result.package.mode === 'file' ? 'file' : 'source'); setSelectionMode('multiple'); setEditingPackage(result.package);
+        setPackageName(result.package.name); setPackageDescription(result.package.description);
+        setSolutions(result.solutions || []);
+        if (result.package.mode === 'file') setLibraryMessage('Reorder the saved ZIPs below. To replace moved or changed files, remove their entries and choose the ZIPs again before saving.');
+      } else { setLoadedPackage(result.package); setEditingPackage(null); }
+    } catch (error) { if (request === solutionRequest.current) setError(error.message || 'Could not load the package.'); }
+    finally { if (request === solutionRequest.current) { setBusy(false); setSolLoading(false); } }
+  };
+  const savePackage = async (asNew = false) => {
+    if (busy || !canSavePackage) return;
+    const request = solutionRequest.current;
+    setBusy(true); setLibraryError(''); setLibraryMessage(sourceMode ? 'Saving package…' : 'Checking ZIP files and saving package…');
+    try {
+      const result = await api.packages.save({
+        ...(editingPackage && !asNew ? { id: editingPackage.id, expectedHash: editingPackage.hash } : {}),
+        mode: sourceMode ? 'source' : 'file',
+        name: packageName, description: packageDescription, sourceUrl, sourceEnv: envName(envs, sourceUrl),
+        exportManaged: deployType === 'managed', items: packageItems
+      });
+      if (request !== solutionRequest.current) return;
+      if (!result.ok) throw new Error(result.error || 'Could not save the package.');
+      if (!sourceMode) {
+        if (multiple) setQueueItems(previous => previous.map((item, index) => ({ ...item, ...result.items[index] })));
+        else setAnalysis(previous => ({ ...previous, sha256: result.items[0].sha256 }));
+      }
+      setEditingPackage(result); setLibraryMessage(`“${result.name}” saved. Choose Predefined packages to load it later.`);
+    } catch (error) { if (request === solutionRequest.current) { setLibraryMessage(''); setLibraryError(error.message); } }
+    finally { if (request === solutionRequest.current) setBusy(false); }
+  };
+  const chooseLibraryFolder = async () => {
+    const actionAccount = account?.homeAccountId;
+    setBusy(true); setLibraryError(''); setLibraryMessage('');
+    try {
+      const result = await api.packages.chooseFolder();
+      if (actionAccount !== draftAccount.current) return;
+      if (!result.ok) throw new Error(result.error || 'Could not choose the package library folder.');
+      if (result.canceled) return;
+      clearLoadedPackage(); setPackageChoice('');
+      await refreshPackages();
+    } catch (error) { if (actionAccount === draftAccount.current) setLibraryError(error.message); }
+    finally { if (actionAccount === draftAccount.current) setBusy(false); }
+  };
+  const removePackage = async () => {
+    const recipe = library.packages.find(item => item.id === packageChoice);
+    if (!recipe || !window.confirm(`Remove “${recipe.name}” from this package library? Deployment history and solution files will remain.`)) return;
+    const actionAccount = account?.homeAccountId;
+    setBusy(true); setLibraryError('');
+    try {
+      const result = await api.packages.remove({ id: recipe.id, hash: recipe.hash });
+      if (actionAccount !== draftAccount.current) return;
+      if (!result.ok) throw new Error(result.error || 'Could not remove the package.');
+      clearLoadedPackage(); setPackageChoice(''); await refreshPackages();
+      if (actionAccount === draftAccount.current) setLibraryMessage('Package definition removed.');
+    } catch (error) { if (actionAccount === draftAccount.current) setLibraryError(error.message); }
+    finally { if (actionAccount === draftAccount.current) setBusy(false); }
+  };
 
   const runAnalyzeSource = async () => {
     setError(''); setBusy(true); resetProgress(['version', 'export', 'analyze', 'store']); setAnalysis(null);
@@ -249,15 +511,20 @@ export default function DeployView({ account, envs, envLoading, envError, refres
   };
 
   const pickFile = async () => {
-    setError('');
-    const r = await api.deploy.pickZip();
-    if (!r.ok) return;
-    setFilePath(r.path);
-    setBusy(true);
+    const request = ++solutionRequest.current;
+    setError(''); setBusy(true);
     try {
+      const r = await api.deploy.pickZip();
+      if (request !== solutionRequest.current || !r.ok) return;
+      setAnalysis(null); setFilePath(r.path);
       const insp = await api.deploy.inspectFile(r.path);
-      if (insp.ok) setAnalysis(insp); else setError(insp.error || 'Could not read package.');
-    } finally { setBusy(false); }
+      if (request !== solutionRequest.current) return;
+      if (!insp.ok || !insp.inspection?.uniqueName || !insp.inspection.version) {
+        throw new Error(insp.error || 'Choose a solution ZIP containing solution.xml.');
+      }
+      setAnalysis(insp);
+    } catch (error) { if (request === solutionRequest.current) setError(error.message || 'Could not read package.'); }
+    finally { if (request === solutionRequest.current) setBusy(false); }
   };
 
   const runAnalyzeFile = () => { if (analysis) setStep('analyze'); };
@@ -311,6 +578,7 @@ export default function DeployView({ account, envs, envLoading, envError, refres
         artifact: analysis.artifact, stored: analysis.stored || {},
         dependencies: analysis.inspection?.dependencies || [], summary: analysis.inspection?.summary || {},
         notes: effectiveNotes, status: r.ok ? 'success' : 'failed', warning: [r.warning, analysis.stored?.warning].filter(Boolean).join(' ') || null, error: r.ok ? null : r.error,
+        importCompleted: r.importCompleted, importJobId: r.importJobId, phase: r.phase,
         runId: r.runId, reporting: r.reporting, teamsNotifications: r.teamsNotifications, teams: r.teams
       });
       setRecord(rec);
@@ -360,10 +628,14 @@ export default function DeployView({ account, envs, envLoading, envError, refres
   const reset = () => {
     // A new deployment starts with a clean configuration as well as a clean result.
     ++solutionRequest.current;
+    ++libraryRequest.current;
+    setLoadedPackage(null); setEditingPackage(null); setPackageChoice('');
+    setPackageName(''); setPackageDescription(''); setLibraryError(''); setLibraryMessage(''); setLibraryLoading(false);
     ++workRequest.current;
     clearTimeout(workTimer.current);
     workTimer.current = null;
     setMode('source');
+    setSelectionMode('single'); setQueueItems([]); setQueueStatuses({}); setQueueResult(null); queueRequest.current = '';
     setStep('config'); setAnalysis(null); setNotes(null); setNotesWarning('');
     setImportResult(null); setRecord(null); setError(''); setProgress({}); setFilePath('');
     setSourceUrl(''); setTargetUrl(''); setSolutions([]); setSolLoading(false);
@@ -375,13 +647,20 @@ export default function DeployView({ account, envs, envLoading, envError, refres
     setBusy(false); setGenBusy(false);
   };
 
+  useEffect(() => {
+    if (draftAccount.current !== account?.homeAccountId) {
+      draftAccount.current = account?.homeAccountId;
+      reset();
+    }
+  }, [account?.homeAccountId]);
+
   const stepIndex = STEPS.findIndex((s) => s.key === step);
   const activeStages = STAGE_ORDER.filter((k) => progress[k]);
 
   return (
     <div>
-      <p className="h1">Deploy a solution</p>
-      <p className="sub">Move a Dataverse solution between environments — as managed or unmanaged — with dependency review, versioning and deployment notes.</p>
+      <p className="h1">Deploy solutions</p>
+      <p className="sub">Move Dataverse solutions between environments — as managed or unmanaged — with dependency review, versioning and deployment notes.</p>
 
       <div className="steps">
         {STEPS.map((s, i) => (
@@ -395,10 +674,66 @@ export default function DeployView({ account, envs, envLoading, envError, refres
 
       {step === 'config' && (
         <div className="card">
+          <fieldset className="deployment-fields" disabled={busy}>
           <div className="seg" style={{ marginBottom: 16 }}>
-            <button className={mode === 'source' ? 'on' : ''} onClick={() => { setMode('source'); setAnalysis(null); }}>From source environment</button>
-            <button className={mode === 'file' ? 'on' : ''} onClick={() => { setMode('file'); setAnalysis(null); }}>Deploy existing package (.zip)</button>
+            <button aria-pressed={mode === 'source'} className={mode === 'source' ? 'on' : ''} onClick={() => changeMode('source')}>From source environment</button>
+            <button aria-pressed={mode === 'file'} className={mode === 'file' ? 'on' : ''} onClick={() => changeMode('file')}>Deploy existing package (.zip)</button>
+            <button aria-pressed={mode === 'predefined'} className={mode === 'predefined' ? 'on' : ''} onClick={() => changeMode('predefined')}>Predefined packages</button>
           </div>
+          {mode !== 'predefined' && <><label>Solutions to deploy</label>
+          <div className="seg" role="group" aria-label="Number of solutions" style={{ marginBottom: 16 }}>
+            <button aria-pressed={!multiple} className={!multiple ? 'on' : ''} onClick={() => changeSelection('single')}>Single solution</button>
+            <button aria-pressed={multiple} className={multiple ? 'on' : ''} onClick={() => changeSelection('multiple')}>Multiple solutions</button>
+          </div></>}
+
+          {mode === 'predefined' && <section className="package-library" aria-labelledby="package-library-title">
+            <div className="toolbar">
+              <div style={{ flex: 1 }}><h3 id="package-library-title">Saved package library</h3><p className="muted">Load saved source solutions or existing ZIP files in their saved import order.</p></div>
+              <button className="btn small secondary" disabled={libraryLoading} onClick={refreshPackages}>Refresh packages</button>
+            </div>
+            <div className="package-folder">
+              <span className="muted">Library folder</span><span>{library.folder || 'Your configured package folder'}</span>
+              <div className="toolbar">
+                <button className="btn small secondary" onClick={chooseLibraryFolder}>Choose folder…</button>
+                {library.folder && <button className="btn small secondary" onClick={() => api.util.revealPath(library.folder).catch(error => setLibraryError(error.message))}>Show folder</button>}
+              </div>
+            </div>
+            <p className="muted">Source packages export current solutions when you review or deploy. ZIP packages remember existing file locations, versions, types and order; files stay in their original locations. Other computers need the definitions and access to every referenced ZIP.</p>
+            {libraryLoading && <p role="status">Loading saved packages…</p>}
+            {solLoading && <p role="status">Loading and checking the package’s solutions in saved order…</p>}
+            {library.warnings.map(warning => <div key={warning} className="alert warn">{warning}</div>)}
+            <label htmlFor="predefined-package">Package</label>
+            <select id="predefined-package" value={packageChoice} disabled={libraryLoading} onChange={event => {
+              const id = event.target.value;
+              setPackageChoice(id); clearLoadedPackage(); setLibraryMessage('');
+              if (id) loadPackage(false, id);
+            }}>
+              <option value="">Choose a saved package…</option>
+              {library.packages.map(recipe => <option key={recipe.id} value={recipe.id}>{recipe.name} · {recipe.items.length} solutions · {new Date(recipe.updatedAt).toLocaleString()}</option>)}
+            </select>
+            {!libraryLoading && !library.packages.length && !libraryError && <p className="muted">No packages saved yet. Choose From source environment or Deploy existing package (.zip), select solutions, arrange their order, and save a named package.</p>}
+            {packageChoice && (() => {
+              const recipe = library.packages.find(item => item.id === packageChoice);
+              return recipe ? <div className="package-preview">
+                <h3>{recipe.name}</h3>
+                {recipe.description && <p>{recipe.description}</p>}
+                <p><strong>Source:</strong> {recipe.mode === 'file' ? 'Existing solution ZIPs' : recipe.sourceEnv || recipe.sourceUrl}</p>
+                {recipe.sourceUrl && <p className="muted package-source-url">{recipe.sourceUrl}</p>}
+                <p><strong>Type:</strong> {recipe.mode === 'file' ? 'Each ZIP keeps its managed or unmanaged type' : recipe.exportManaged ? 'Managed' : 'Unmanaged'}</p>
+                <ol aria-label="Saved solution order">{recipe.items.map(item => <li key={item.solutionUniqueName}>
+                  {item.solution} <span className="muted">({item.solutionUniqueName})</span>
+                  {recipe.mode === 'file' && <><span> · v{item.version} · {item.exportManaged ? 'Managed' : 'Unmanaged'}</span><div className="muted package-source-url">{item.artifact}</div></>}
+                </li>)}</ol>
+                <div className="toolbar">
+                  <button className="btn" disabled={libraryLoading} onClick={() => loadPackage()}>{loadedPackage?.id === recipe.id ? recipe.mode === 'file' ? 'Recheck ZIP files' : 'Refresh source versions' : 'Load package'}</button>
+                  <button className="btn secondary" disabled={libraryLoading} onClick={() => loadPackage(true)}>Edit package</button>
+                  <button className="btn secondary" disabled={libraryLoading} onClick={removePackage}>Remove definition</button>
+                </div>
+              </div> : <p className="alert warn">This package is no longer listed. Refresh packages and choose it again.</p>;
+            })()}
+          </section>}
+          {mode === 'predefined' && libraryError && <div className="alert err" role="alert">{libraryError}</div>}
+          {mode === 'predefined' && libraryMessage && <div className="alert info" role="status">{libraryMessage}</div>}
 
           <div className="toolbar">
             <h3 style={{ margin: 0, flex: 1 }}>Configure deployment {envLoading && <span className="spin" />}</h3>
@@ -406,15 +741,16 @@ export default function DeployView({ account, envs, envLoading, envError, refres
           </div>
           {envError && <div className="alert warn">{envError}</div>}
 
-          {mode === 'source' ? (
+          {sourceMode ? (
             <>
               <div className="row">
                 <div className="col">
                   <label>Source environment</label>
-                  <select value={sourceUrl} onChange={(e) => onSource(e.target.value)}>
+                  {mode === 'predefined' ? <input readOnly value={loadedPackage ? `${loadedPackage.sourceEnv || loadedPackage.sourceUrl}` : ''} placeholder="Load a saved package first" /> : <select value={sourceUrl} onChange={(e) => onSource(e.target.value)}>
                     <option value="">Select source…</option>
+                    {sourceUrl && !envs.some(e => e.environmentUrl === sourceUrl) && <option value={sourceUrl}>{sourceUrl}</option>}
                     {envs.map((e) => <option key={e.environmentUrl} value={e.environmentUrl}>{e.displayName}</option>)}
-                  </select>
+                  </select>}
                 </div>
                 <div className="col">
                   <label>Target environment</label>
@@ -424,24 +760,25 @@ export default function DeployView({ account, envs, envLoading, envError, refres
                   </select>
                 </div>
               </div>
-              <div className="row" style={{ marginTop: 14 }}>
+              {mode === 'source' && <div className="row" style={{ marginTop: 14 }}>
                 <div className="col">
-                  <label htmlFor="solution-search">Unmanaged source solution {solLoading && <span className="spin" />}</label>
-                  <SolutionCombobox key={sourceUrl || 'no-source'} solutions={solutions} selected={selectedSolution} onSelect={setSolutionName} disabled={!sourceUrl || solLoading} loading={solLoading} />
-                  <p className="muted" style={{ margin: '6px 0 0' }}>Only unmanaged source solutions are listed. You can export one as a managed or unmanaged package below.</p>
+                  <label htmlFor="solution-search">{multiple ? 'Add unmanaged source solutions' : 'Unmanaged source solution'} {solLoading && <span className="spin" />}</label>
+                  <SolutionCombobox key={`${sourceUrl}-${selectionMode}`} solutions={multiple ? solutions.filter(solution => !queueItems.some(item => item.solutionUniqueName === solution.uniqueName)) : solutions} selected={multiple ? null : selectedSolution} onSelect={multiple ? addQueueSolution : setSolutionName} disabled={!sourceUrl || solLoading} loading={solLoading} />
+                  <p className="muted" style={{ margin: '6px 0 0' }}>{multiple ? 'Choose solutions one at a time, then arrange their import order below.' : 'Only unmanaged source solutions are listed. You can export one as a managed or unmanaged package below.'}</p>
                 </div>
+                {!multiple &&
                 <div className="col" style={{ maxWidth: 200 }}>
                   <label>New version {selectedSolution ? `(was ${selectedSolution.version})` : ''}</label>
                   <input value={version} onChange={(e) => setVersion(e.target.value)} placeholder="1.0.0.1" />
-                </div>
-              </div>
+                </div>}
+              </div>}
 
               <div style={{ marginTop: 14 }}>
                 <label>Deploy as</label>
-                <div className="seg">
-                  <button className={deployType === 'managed' ? 'on' : ''} onClick={() => setDeployType('managed')}>Managed (recommended)</button>
-                  <button className={deployType === 'unmanaged' ? 'on' : ''} onClick={() => setDeployType('unmanaged')}>Unmanaged</button>
-                </div>
+                {mode === 'predefined' ? <TypePill managed={deployType === 'managed'} /> : <div className="seg">
+                  <button className={deployType === 'managed' ? 'on' : ''} onClick={() => changeDeployType('managed')}>Managed (recommended)</button>
+                  <button className={deployType === 'unmanaged' ? 'on' : ''} onClick={() => changeDeployType('unmanaged')}>Unmanaged</button>
+                </div>}
                 <p className="muted" style={{ margin: '6px 0 0' }}>
                   {deployType === 'managed'
                     ? 'Exports and imports a managed package — the standard way to move to test/prod.'
@@ -460,10 +797,10 @@ export default function DeployView({ account, envs, envLoading, envError, refres
                   </select>
                 </div>
                 <div className="col">
-                  <label>Solution package (.zip)</label>
+                  <label>{multiple ? 'Solution packages (.zip)' : 'Solution package (.zip)'}</label>
                   <div className="row" style={{ alignItems: 'center' }}>
-                    <input readOnly value={filePath ? filePath.split(/[\\/]/).pop() : ''} placeholder="No file selected" />
-                    <button className="btn secondary" style={{ maxWidth: 130 }} onClick={pickFile}>{busy ? <span className="spin" /> : 'Choose…'}</button>
+                    <input readOnly value={multiple ? (queueItems.length ? `${queueItems.length} solutions selected` : '') : filePath ? filePath.split(/[\\/]/).pop() : ''} placeholder="No file selected" />
+                    {mode !== 'predefined' && <button className="btn secondary" style={{ maxWidth: 150 }} onClick={multiple ? pickQueueFiles : pickFile}>{busy ? <span className="spin" /> : multiple ? 'Choose ZIPs…' : 'Choose…'}</button>}
                   </div>
                 </div>
               </div>
@@ -473,10 +810,41 @@ export default function DeployView({ account, envs, envLoading, envError, refres
                 </div>
               )}
               <p className="muted" style={{ marginTop: 8 }}>
-                Deploy a prebuilt package directly to the target — the same way a CI/CD pipeline promotes a managed solution downstream. You can pick a package the app exported earlier (see the OneDrive/local folder in Settings).
+                {mode === 'predefined' ? 'The saved ZIPs will import in the order below. Use Edit package to change files or their order.' : 'Select existing solution ZIPs, including packages the app exported earlier. You can save their locations and import order as a predefined package below.'}
               </p>
             </>
           )}
+
+          {multiple && <section style={{ marginTop: 20 }}>
+            <h3>{loadedPackage ? `${loadedPackage.name} · Solution import order` : 'Solution import order'}</h3>
+            <p className="muted">{mode === 'predefined' ? sourceMode ? 'Current source versions are shown below. The saved order and type are kept for this deployment; use Edit package to change the definition.' : 'Saved ZIP versions, file locations and order are shown below. Use Edit package to change the definition.' : 'Put required solutions first. Each import finishes, including Microsoft ribbon installation, before the next starts.'}</p>
+            <QueueList items={queueItems} statuses={queueStatuses} validationIssues={mode === 'file' ? packageFileIssues : []} editable={mode !== 'predefined'} onMove={moveQueueItem}
+              onRemove={index => { setQueueItems(previous => previous.filter((_, position) => position !== index)); setQueueStatuses({}); }}
+              onVersion={mode === 'source' ? (index, value) => { setQueueStatuses({}); setQueueItems(previous => previous.map((item, position) => position === index ? { ...item, version: value, analysis: undefined } : item)); } : undefined} />
+          </section>}
+
+          {mode !== 'predefined' && <section className="package-save" aria-labelledby="package-save-title">
+            <h3 id="package-save-title">{editingPackage ? 'Update saved package' : 'Save as a predefined package'}</h3>
+            <p className="muted">{sourceMode ? 'Save this source, solution order and deployment type for future use. The target, ZIPs and version edits are not saved; loading a package uses current source versions.' : 'Save the selected ZIP file locations, versions, types and import order for future use. ZIPs stay in their original locations. Keep them accessible; moved or changed files must be selected and saved again. A target is not needed to save.'}</p>
+            <div className="row">
+              <div className="col"><label htmlFor="package-name">Package name</label><input id="package-name" maxLength={100} value={packageName} onChange={event => setPackageName(event.target.value)} placeholder="e.g. PREXA" /></div>
+              <div className="col"><label htmlFor="package-description">Package description (optional)</label><input id="package-description" maxLength={2000} value={packageDescription} onChange={event => setPackageDescription(event.target.value)} /></div>
+            </div>
+            <div className="toolbar">
+              <button className="btn secondary" disabled={busy || !canSavePackage} aria-describedby="package-save-status" onClick={() => savePackage()}>{editingPackage ? 'Save changes' : 'Save package'}</button>
+              {editingPackage && <button className="btn secondary" disabled={busy || !canSavePackage} aria-describedby="package-save-status" onClick={() => savePackage(true)}>Save as new package</button>}
+              <button className="btn small secondary" onClick={() => changeMode('predefined')}>Open package library</button>
+            </div>
+            <div id="package-save-status" aria-live="polite">
+              {packageSaveIssue && <p className="muted">{packageSaveIssue}</p>}
+              {!!packageFileIssues.length && <ul>{packageFileIssues.map(issue => <li key={issue.index}>
+                <strong>Solution {issue.index + 1}: {issue.solution}</strong>
+                <ul>{issue.reasons.map(reason => <li key={reason}>{reason}</li>)}</ul>
+              </li>)}</ul>}
+              {libraryError && <div className="alert err" role="alert">{libraryError}</div>}
+              {libraryMessage && <div className="alert info" role="status">{libraryMessage}</div>}
+            </div>
+          </section>}
 
           <div style={{ marginTop: 14 }}>
             <label>Related work items / references (optional)</label>
@@ -504,12 +872,15 @@ export default function DeployView({ account, envs, envLoading, envError, refres
           </div>
 
           <div className="row" style={{ marginTop: 14 }}>
-            <Checkbox label="Publish after import" checked={publishChanges} onChange={setPublishChanges} disabled={managed} />
+            <Checkbox label="Publish after import" checked={publishChanges} onChange={setPublishChanges} disabled={multiple ? (sourceMode ? deployType === 'managed' : queueItems.every(item => item.exportManaged)) : managed} />
             <Checkbox label="Overwrite unmanaged customizations" checked={forceOverwrite} onChange={setForceOverwrite} />
           </div>
 
           <div className="right">
-            {mode === 'source' ? (
+            {multiple ? <>
+              <button className="btn secondary" disabled={!canReviewQueue || busy} onClick={reviewQueue}>{busy ? <span className="spin" /> : sourceMode ? 'Export & review queue →' : 'Review queue →'}</button>
+              {sourceMode && <button className="btn agent-button" disabled={!canReviewQueue || busy} onClick={() => { setQueueResult(null); setProgress({}); setStep('deploy'); }}>Continue with agent →</button>}
+            </> : mode === 'source' ? (
               <>
                 <button className="btn secondary" disabled={!canAnalyzeSource || busy} onClick={runAnalyzeSource}>{busy ? <span className="spin" /> : 'Export & review →'}</button>
                 <button className="btn agent-button" disabled={!canAnalyzeSource || busy} onClick={continueWithAgent}>Continue with agent →</button>
@@ -520,11 +891,33 @@ export default function DeployView({ account, envs, envLoading, envError, refres
           </div>
           {mode === 'source' && <p className="muted agent-help">Continue with agent to review the deployment before exporting. The agent exports when you start it; package dependency warnings alone do not trigger source changes.</p>}
           {mode === 'source' && sourceUrl && sourceUrl === targetUrl && <div className="alert warn" style={{ marginTop: 12 }}>Source and target must differ.</div>}
+          </fieldset>
           {(busy || activeStages.length > 0) && <ProgressPanel stages={activeStages} progress={progress} />}
         </div>
       )}
 
-      {step === 'analyze' && analysis && (
+      {step === 'analyze' && multiple && <>
+        <div className="card">
+          <h3>Review deployment queue</h3>
+          <QueueList items={queueItems} />
+          <p className="muted">Imports run in this order. Open each package below to review its components and dependencies.</p>
+        </div>
+        {queueItems.map(item => <details key={item.solutionUniqueName} className="queue-review">
+          <summary>{item.solution || item.solutionUniqueName} · v{item.version}</summary>
+          <AnalyzeStep analysis={item.analysis} managed={item.analysis.inspection.managed} onReveal={() => api.util.revealPath(item.analysis.artifact)} />
+        </details>)}
+        <div className="card">
+          <h3>Deployment notes</h3>
+          <label htmlFor="queue-notes">Saved with each solution in this queue</label>
+          <textarea id="queue-notes" value={effectiveNotes} onChange={event => setNotes(event.target.value)} />
+          <div className="right">
+            <button className="btn secondary" onClick={() => setStep('config')}>← Back</button>
+            <button className="btn" onClick={() => { setQueueResult(null); setQueueStatuses({}); setProgress({}); setStep('deploy'); }}>Continue to deploy →</button>
+          </div>
+        </div>
+      </>}
+
+      {step === 'analyze' && !multiple && analysis && (
         <>
           <AnalyzeStep analysis={analysis} managed={managed} onReveal={() => api.util.revealPath(analysis.artifact)} />
           <div className="card">
@@ -550,7 +943,37 @@ export default function DeployView({ account, envs, envLoading, envError, refres
         </>
       )}
 
-      {step === 'deploy' && (
+      {step === 'deploy' && multiple && <div className="card">
+        <h3>Deploy {loadedPackage?.name || 'queue'} to {envName(envs, targetUrl)}</h3>
+        <p className="muted">{sourceMode ? loadedPackage?.sourceEnv || envName(envs, sourceUrl) : 'Package files'} → {envName(envs, targetUrl)} · {queueItems.length} solutions</p>
+        <QueueList items={queueItems} statuses={queueStatuses} />
+        <p className="muted">Uses your signed-in Microsoft account. Each selected solution's import is tracked separately. If Microsoft background solution or ribbon installation is detected, the queue checks every 10 seconds and waits up to 15 minutes before continuing. A failure stops the queue.</p>
+        {!queueResult && <>
+          <label htmlFor="queue-deploy-notes">Deployment notes</label>
+          <textarea id="queue-deploy-notes" disabled={busy} value={effectiveNotes} onChange={event => setNotes(event.target.value)} />
+          <Checkbox label="Commit artifacts + notes to local git" checked={gitCommit} onChange={setGitCommit} disabled={busy} />
+          <div className="right deploy-actions">
+            <button className="btn secondary" disabled={busy} onClick={() => setStep(queueItems.every(item => item.analysis) ? 'analyze' : 'config')}>← Back</button>
+            {sourceMode && <button className="btn agent-button" disabled={busy || !canReviewQueue} onClick={() => runQueue(true)}>Deploy queue with agent</button>}
+            {queueItems.every(item => item.analysis) && <button className="btn" disabled={busy || !canReviewQueue} onClick={() => runQueue(false)}>{busy ? <span className="spin" /> : 'Import queue to target'}</button>}
+          </div>
+        </>}
+        {(busy || activeStages.length > 0) && <ProgressPanel stages={activeStages} progress={progress} />}
+        {queueResult && <div className={'alert ' + (queueResult.ok ? 'info' : 'err')}>
+          <b>{queueResult.ok ? '✔ Deployment queue completed' : '✕ Deployment queue stopped'}</b>
+          <p>{queueResult.completed || 0} of {queueResult.total || queueItems.length} solutions completed.</p>
+          {!queueResult.ok && <>
+            <p><strong>Reason:</strong> {queueResult.error}</p>
+            <p>Remaining solutions were not started.</p>
+          </>}
+          {queueResult.results?.filter(result => !result.ok && result.importCompleted).map(result => <p key={result.solutionUniqueName}>{result.solutionUniqueName} was imported, but the installation check failed. Check its target status before deploying it again.</p>)}
+          {queueResult.results?.filter(result => result.warning).map(result => <p key={result.solutionUniqueName}>{result.solutionUniqueName}: {result.warning}</p>)}
+          {queueResult.warning && <p><strong>History warning:</strong> {queueResult.warning}</p>}
+          <div className="right"><button className="btn small" onClick={reset}>New deployment</button></div>
+        </div>}
+      </div>}
+
+      {step === 'deploy' && !multiple && (
         <div className="card">
           <h3>Deploy to {envName(envs, targetUrl)}</h3>
           {mode === 'source' && !analysis && <div className="alert info">The agent will set the version, export the source solution, and import it into the target when you start deployment. It will repair dependencies only if the target import fails with identifiable missing components.</div>}
@@ -587,12 +1010,13 @@ export default function DeployView({ account, envs, envLoading, envError, refres
             <div className={'alert ' + (importResult.ok ? 'info' : 'err')} style={{ marginTop: 14 }}>
               {importResult.ok ? (record ? '✔ Import completed and recorded in history.' : '✔ Import completed; history could not be saved.') : (importResult.agent ? '✖ Agent stopped: ' : '✖ Import failed: ') + (importResult.error || '')}
               {(record?.warning || importResult.warning) && <p>{record?.warning || importResult.warning}</p>}
+              {!importResult.ok && importResult.importCompleted && <p>The solution import completed, but the installation check failed. Check its target status before deploying it again.</p>}
               {importResult.attempts?.length > 0 && <p>Import attempts: {importResult.attempts.length}. Source components added: {importResult.repairs?.length || 0}.</p>}
               {importResult.dependencies?.length > 0 && <p>Failed-import dependencies: {importResult.dependencies.map((item) => `${item.requiredSchema || item.requiredId || item.requiredType} (type ${item.requiredTypeCode || '?'}${item.requiredId ? ', ID ' + item.requiredId : ', no ID'})`).join(', ')}</p>}
               {importResult.importLog && <details><summary>View Dataverse import log</summary><pre className="log">{importResult.importLog}</pre></details>}
               <div className="right">
                 {record?.notesFile && <button className="btn small secondary" onClick={() => api.util.revealPath(record.notesFile)}>Open notes file</button>}
-                {!importResult.ok && <button className="btn small secondary" onClick={() => { setImportResult(null); setRecord(null); resetProgress(STAGE_ORDER); }}>Retry with these details</button>}
+                {!importResult.ok && !importResult.importCompleted && <button className="btn small secondary" onClick={() => { setImportResult(null); setRecord(null); resetProgress(STAGE_ORDER); }}>Retry with these details</button>}
                 <button className="btn small" onClick={reset}>New deployment</button>
               </div>
             </div>
